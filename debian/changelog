@@ -1,3 +1,10 @@
+phoc (0.56.0) experimental; urgency=medium
+
+  [ Ekaterine Papava ]
+  * po: Add Georgian translation
+
+ -- Guido Günther <agx@sigxcpu.org>  Fri, 03 Jul 2026 15:28:49 +0200
+
 phoc (0.56~rc1) experimental; urgency=medium
 
   * cairo-texture: Mark texture as invalid when renderer goes away.
