@@ -20,6 +20,7 @@
 #include <wlr/backend/session.h>
 #include <wlr/types/wlr_pointer.h>
 #include <xkbcommon/xkbcommon.h>
+#include <xkbcommon/xkbregistry.h>
 #include "keyboard.h"
 #include "phosh-private.h"
 #include "seat.h"
@@ -43,7 +44,7 @@ struct _PhocKeyboard {
   GSettings *input_settings;
   GSettings *keyboard_settings;
   struct xkb_keymap *keymap;
-  GnomeXkbInfo *xkbinfo;
+  struct rxkb_context *xkb_registry;
 
   xkb_keysym_t pressed_keysyms_translated[PHOC_KEYBOARD_PRESSED_KEYSYMS_CAP];
   xkb_keysym_t pressed_keysyms_raw[PHOC_KEYBOARD_PRESSED_KEYSYMS_CAP];
@@ -516,6 +517,35 @@ set_xkb_keymap (PhocKeyboard *self, const gchar *layout, const gchar *variant, c
 }
 
 
+static gboolean
+find_layout_variant (struct rxkb_context *ctx,
+                      const char          *id,
+                      const char         **layout,
+                      const char         **variant)
+{
+  g_auto (GStrv) parts = NULL;
+  const char *want_layout;
+  const char *want_variant;
+
+  parts = g_strsplit (id, "+", 2);
+  want_layout = parts[0];
+  want_variant = want_layout ? parts[1] : NULL;
+
+  for (struct rxkb_layout *l = rxkb_layout_first (ctx); l; l = rxkb_layout_next (l)) {
+    if (g_strcmp0 (rxkb_layout_get_name (l), want_layout) != 0)
+      continue;
+    if (g_strcmp0 (rxkb_layout_get_variant (l), want_variant) != 0)
+      continue;
+
+    *layout = rxkb_layout_get_name (l);
+    *variant = rxkb_layout_get_variant (l);
+    return TRUE;
+  }
+
+  return FALSE;
+}
+
+
 static void
 on_input_setting_changed (PhocKeyboard *self,
                           const gchar  *key,
@@ -561,8 +591,8 @@ on_input_setting_changed (PhocKeyboard *self,
     g_debug ("Setting options %s", xkb_options_string);
   }
 
-  if (!gnome_xkb_info_get_layout_info (self->xkbinfo, id,
-                                       NULL, NULL, &layout, &variant)) {
+  if (!self->xkb_registry ||
+      !find_layout_variant (self->xkb_registry, id, &layout, &variant)) {
     g_debug ("Failed to get layout info for %s", id);
     return;
   }
@@ -640,7 +670,7 @@ phoc_keyboard_dispose(GObject *object)
 
   g_clear_object (&self->input_settings);
   g_clear_object (&self->keyboard_settings);
-  g_clear_object (&self->xkbinfo);
+  g_clear_pointer (&self->xkb_registry, rxkb_context_unref);
 
   G_OBJECT_CLASS (phoc_keyboard_parent_class)->dispose (object);
 }
@@ -686,7 +716,11 @@ phoc_keyboard_constructed (GObject *object)
   self->meta_key = WLR_MODIFIER_LOGO;
 
   set_fallback_keymap (self);
-  self->xkbinfo = gnome_xkb_info_new ();
+  self->xkb_registry = rxkb_context_new (RXKB_CONTEXT_LOAD_EXOTIC_RULES);
+  if (!rxkb_context_parse_default_ruleset (self->xkb_registry)) {
+    g_warning ("Failed to parse XKB rules, keyboard layout switching will not work");
+    g_clear_pointer (&self->xkb_registry, rxkb_context_unref);
+  }
 
   g_object_connect (self->input_settings,
     "swapped-signal::changed::sources", G_CALLBACK (on_input_setting_changed), self,

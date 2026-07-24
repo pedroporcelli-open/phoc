@@ -112,15 +112,14 @@ phoc_deps = [
   input,
   drm,
   gio,
-  glesv2,
   gmobile_dep,
-  gnome_desktop,
   gsettings_desktop_schemas_dep,
   math,
   pixman,
   wayland_server,
   wlroots,
   xkbcommon,
+  xkbregistry,
 ]
 
 if have_xwayland
