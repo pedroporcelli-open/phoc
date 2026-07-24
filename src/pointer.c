@@ -29,7 +29,7 @@ G_DEFINE_TYPE (PhocPointer, phoc_pointer, PHOC_TYPE_INPUT_DEVICE);
 
 static void
 on_mouse_settings_changed (PhocPointer *self,
-                           const gchar *key,
+                           const char  *key,
                            GSettings   *settings)
 {
   struct libinput_device *ldev;
@@ -67,7 +67,7 @@ on_mouse_settings_changed (PhocPointer *self,
 
 static void
 on_touchpad_settings_changed (PhocPointer *self,
-                              const gchar *key)
+                              const char  *key)
 {
   struct libinput_device *ldev;
   gboolean enabled;
@@ -105,7 +105,7 @@ on_touchpad_settings_changed (PhocPointer *self,
   enabled = g_settings_get_boolean (settings, "tap-and-drag-lock");
   libinput_device_config_tap_set_drag_lock_enabled (ldev,
                                                     enabled ?
-                                                    LIBINPUT_CONFIG_DRAG_LOCK_ENABLED :
+                                                    LIBINPUT_CONFIG_DRAG_LOCK_ENABLED_STICKY :
                                                     LIBINPUT_CONFIG_DRAG_LOCK_DISABLED);
 
   enabled = g_settings_get_boolean (settings, "disable-while-typing");

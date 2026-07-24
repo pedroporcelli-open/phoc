@@ -17,7 +17,12 @@
 #include <wlr/backend/libinput.h>
 #include <wlr/types/wlr_input_device.h>
 
+#include <linux/input-event-codes.h>
+
 #define PHOC_INPUT_DEVICE_SELF(p) PHOC_PRIV_CONTAINER(PHOC_INPUT_DEVICE, PhocInputDevice, (p))
+
+typedef struct udev_device udev_device;
+G_DEFINE_AUTOPTR_CLEANUP_FUNC (udev_device, udev_device_unref);
 
 enum {
   PROP_0,
@@ -46,9 +51,32 @@ typedef struct _PhocInputDevicePrivate {
   char                    *product;
 
   struct wl_listener       device_destroy;
+
+  int                      is_keyboard;
 } PhocInputDevicePrivate;
 
 G_DEFINE_TYPE_WITH_PRIVATE (PhocInputDevice, phoc_input_device, G_TYPE_OBJECT)
+
+
+static gboolean
+phoc_input_device_has_udev_property (PhocInputDevice *self, const char *prop_name)
+{
+  struct libinput_device *dev_handle;
+  g_autoptr (udev_device) udev_dev = NULL;
+  const char *value;
+
+  dev_handle = phoc_input_device_get_libinput_device_handle (self);
+  udev_dev = libinput_device_get_udev_device (dev_handle);
+
+  if (!udev_dev)
+    return FALSE;
+
+  value = udev_device_get_property_value (udev_dev, prop_name);
+  if (g_strcmp0 (value, "1") == 0)
+    return TRUE;
+
+  return FALSE;
+}
 
 
 static void
@@ -138,12 +166,17 @@ phoc_input_device_constructed (GObject *object)
   G_OBJECT_CLASS (phoc_input_device_parent_class)->constructed (object);
 
   priv = phoc_input_device_get_instance_private (self);
-  if (priv->device) {
-    priv->device_destroy.notify = handle_device_destroy;
-    wl_signal_add (&priv->device->events.destroy, &priv->device_destroy);
+  g_assert (priv->device);
 
-    priv->vendor = g_strdup_printf ("%.4x", priv->device->vendor);
-    priv->product = g_strdup_printf ("%.4x", priv->device->product);
+  priv->device_destroy.notify = handle_device_destroy;
+  wl_signal_add (&priv->device->events.destroy, &priv->device_destroy);
+
+  if (wlr_input_device_is_libinput (priv->device)) {
+    struct libinput_device *ldev;
+
+    ldev = phoc_input_device_get_libinput_device_handle (self);
+    priv->vendor = g_strdup_printf ("%.4x", libinput_device_get_id_vendor (ldev));
+    priv->product = g_strdup_printf ("%.4x", libinput_device_get_id_product (ldev));
   }
 }
 
@@ -195,6 +228,9 @@ phoc_input_device_class_init (PhocInputDeviceClass *klass)
 static void
 phoc_input_device_init (PhocInputDevice *self)
 {
+  PhocInputDevicePrivate *priv = phoc_input_device_get_instance_private (self);
+
+  priv->is_keyboard = -1;
 }
 
 /**
@@ -256,6 +292,51 @@ phoc_input_device_get_is_touchpad (PhocInputDevice *self)
 
   g_debug ("%s is a touchpad device", libinput_device_get_name (ldev));
   return TRUE;
+}
+
+/**
+ * phoc_input_device_get_is_keyboard:
+ * @self: The %PhocInputDevice
+ *
+ * Returns: %TRUE if this is a physical keyboard
+ */
+gboolean
+phoc_input_device_get_is_keyboard (PhocInputDevice *self)
+{
+  struct libinput_device *ldev;
+  PhocInputDevicePrivate *priv;
+
+  g_assert (PHOC_IS_INPUT_DEVICE (self));
+  priv = phoc_input_device_get_instance_private (self);
+
+  if (priv->is_keyboard >= 0)
+    return !!priv->is_keyboard;
+
+  if (!wlr_input_device_is_libinput (priv->device)) {
+    priv->is_keyboard = 0;
+    return FALSE;
+  }
+
+  ldev = phoc_input_device_get_libinput_device_handle (self);
+  /* A physical keyboard should at least have a space, enter and a letter */
+  if (libinput_device_keyboard_has_key (ldev, KEY_A) &&
+      libinput_device_keyboard_has_key (ldev, KEY_ENTER) &&
+      libinput_device_keyboard_has_key (ldev, KEY_SPACE)) {
+    priv->is_keyboard = 1;
+    goto out;
+  }
+
+  if (phoc_input_device_has_udev_property (self, "ID_INPUT_KEYBOARD")) {
+    priv->is_keyboard = 1;
+    goto out;
+  }
+
+  priv->is_keyboard = 0;
+ out:
+  g_debug ("%s is %s a keyboard device",
+           libinput_device_get_name (ldev),
+           priv->is_keyboard ? "" : "not");
+  return !!priv->is_keyboard;
 }
 
 /**

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2023 Guido Günther
+ * Copyright (C) 2023 The Phosh Developers
  *
  * SPDX-License-Identifier: GPL-3.0-or-later
  * Author: Guido Günther <agx@sigxcpu.org>
@@ -102,7 +102,7 @@ main (int argc, char *argv[])
   opt_context = g_option_context_new ("- ext-idle-notify-v1 example");
   g_option_context_add_main_entries (opt_context, options, NULL);
   if (!g_option_context_parse (opt_context, &argc, &argv, &err)) {
-    g_critical ("Failed to aprse options: %s", err->message);
+    g_critical ("Failed to parse options: %s", err->message);
     return EXIT_FAILURE;
   }
 

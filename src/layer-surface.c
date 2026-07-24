@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2021 Purism SPC
+ *               2024-2025 The Phosh Developers
  *
  * SPDX-License-Identifier: GPL-3.0-or-later
  * Author: Guido Günther <agx@sigxcpu.org>
@@ -10,9 +11,29 @@
 #include "phoc-config.h"
 
 #include "anim/animatable.h"
+#include "layer-shell-private.h"
 #include "layer-surface.h"
-#include "layers.h"
+#include "layer-shell.h"
+#include "layout-transaction.h"
 #include "output.h"
+#include "xdg-popup.h"
+#include "server.h"
+#include "subsurface.h"
+#include "utils.h"
+
+#include <wlr/types/wlr_buffer.h>
+
+/**
+ * PhocLayerSurface:
+ *
+ * A Layer surface backed by the wlr-layer-surface wayland protocol.
+ *
+ * For details on how to setup a layer surface see `phoc_handle_layer_shell_surface`.
+ *
+ * This handles the events concerning individual surfaces like mapping
+ * and unmapping.  For the actual layout of surfaces on a
+ * [class@Output] see [func@layer_shell_arrange].
+ */
 
 enum {
   PROP_0,
@@ -21,12 +42,148 @@ enum {
 };
 static GParamSpec *props[PROP_LAST_PROP];
 
-
+static void phoc_layer_surface_child_root_iface_init (PhocChildRootInterface *iface);
 static void phoc_animatable_interface_init (PhocAnimatableInterface *iface);
 
 G_DEFINE_TYPE_WITH_CODE (PhocLayerSurface, phoc_layer_surface, G_TYPE_OBJECT,
+                         G_IMPLEMENT_INTERFACE (PHOC_TYPE_CHILD_ROOT,
+                                                phoc_layer_surface_child_root_iface_init)
                          G_IMPLEMENT_INTERFACE (PHOC_TYPE_ANIMATABLE,
                                                 phoc_animatable_interface_init))
+
+/* {{{ PhocChildRoot interface */
+
+static void phoc_layer_surface_apply_damage (PhocLayerSurface *self);
+
+static void
+phoc_layer_surface_child_root_get_box (PhocChildRoot *root, struct wlr_box *box)
+{
+  PhocLayerSurface *self = PHOC_LAYER_SURFACE (root);
+
+  g_assert (PHOC_IS_LAYER_SURFACE (self));
+
+  *box = self->geo;
+}
+
+
+static gboolean
+phoc_layer_surface_child_root_is_mapped (PhocChildRoot *root)
+{
+  PhocLayerSurface *self = PHOC_LAYER_SURFACE (root);
+
+  g_assert (PHOC_IS_LAYER_SURFACE (self));
+
+  return self->mapped;
+}
+
+
+static void
+phoc_layer_surface_child_root_apply_damage (PhocChildRoot *root)
+{
+  PhocLayerSurface *self = PHOC_LAYER_SURFACE (root);
+
+  g_assert (PHOC_IS_LAYER_SURFACE (self));
+
+  phoc_layer_surface_apply_damage (self);
+}
+
+
+static void
+phoc_layer_surface_child_root_add_child (PhocChildRoot *root, PhocViewChild *child)
+{
+  PhocLayerSurface *self = PHOC_LAYER_SURFACE (root);
+
+  g_assert (PHOC_IS_LAYER_SURFACE (self));
+  g_assert (PHOC_IS_VIEW_CHILD (child));
+
+  self->child_surfaces = g_slist_prepend (self->child_surfaces, child);
+}
+
+
+static void
+phoc_layer_surface_child_root_remove_child (PhocChildRoot *root, PhocViewChild *child)
+{
+  PhocLayerSurface *self = PHOC_LAYER_SURFACE (root);
+
+  g_assert (PHOC_IS_LAYER_SURFACE (self));
+  g_assert (PHOC_IS_VIEW_CHILD (child));
+
+  self->child_surfaces = g_slist_remove (self->child_surfaces, child);
+}
+
+
+static gboolean
+phoc_layer_surface_child_root_unconstrain_box (PhocChildRoot *root, struct wlr_box *box)
+{
+  PhocLayerSurface *self = PHOC_LAYER_SURFACE (root);
+  PhocOutput *output = phoc_layer_surface_get_output (self);
+
+  if (!output)
+    return FALSE;
+
+  /* The output box expressed in the coordinate system of the toplevel
+   * parent of the popup */
+  *box = (struct wlr_box) {
+    .x = -self->geo.x,
+    .y = -self->geo.y,
+    .width = output->usable_area.width,
+    .height = output->usable_area.height,
+  };
+
+  return TRUE;
+}
+
+
+static void
+phoc_layer_surface_child_root_iface_init (PhocChildRootInterface *iface)
+{
+  iface->get_box = phoc_layer_surface_child_root_get_box;
+  iface->is_mapped = phoc_layer_surface_child_root_is_mapped;
+  iface->apply_damage = phoc_layer_surface_child_root_apply_damage;
+  iface->add_child = phoc_layer_surface_child_root_add_child;
+  iface->remove_child = phoc_layer_surface_child_root_remove_child;
+  iface->unconstrain_popup = phoc_layer_surface_child_root_unconstrain_box;
+}
+
+/* ))) */
+
+static void
+phoc_layer_surface_apply_damage (PhocLayerSurface *self)
+{
+  struct wlr_layer_surface_v1 *wlr_layer_surface;
+  struct wlr_output *wlr_output;
+
+  g_assert (PHOC_IS_LAYER_SURFACE (self));
+  wlr_layer_surface = self->layer_surface;
+
+  wlr_output = wlr_layer_surface->output;
+  if (!wlr_output)
+    return;
+
+  phoc_output_damage_from_layer_surface (PHOC_OUTPUT (wlr_output->data),
+                                         self,
+                                         FALSE);
+}
+
+
+static void
+phoc_layer_surface_damage_whole (PhocLayerSurface *self)
+{
+  struct wlr_layer_surface_v1 *wlr_layer_surface;
+  struct wlr_output *wlr_output;
+
+  g_assert (PHOC_IS_LAYER_SURFACE (self));
+  wlr_layer_surface = self->layer_surface;
+
+  wlr_output = wlr_layer_surface->output;
+  if (!wlr_output)
+    return;
+
+  phoc_output_damage_from_layer_surface (PHOC_OUTPUT (wlr_output->data),
+                                         self,
+                                         TRUE);
+}
+
 
 static guint
 phoc_layer_surface_add_frame_callback (PhocAnimatable    *iface,
@@ -50,6 +207,193 @@ phoc_layer_surface_remove_frame_callback (PhocAnimatable *iface, guint id)
   /* Only remove frame callback if output is not inert */
   if (self->layer_surface->output)
     phoc_output_remove_frame_callback (output, id);
+}
+
+
+static void
+handle_surface_commit (struct wl_listener *listener, void *data)
+{
+  PhocLayerSurface *self = wl_container_of (listener, self, surface_commit);
+  struct wlr_layer_surface_v1 *wlr_layer_surface = self->layer_surface;
+  struct wlr_output *wlr_output = wlr_layer_surface->output;
+  gboolean exclusive_zone_changed;
+
+  if (!wlr_output)
+    return;
+
+  PhocOutput *output = PHOC_OUTPUT (wlr_output->data);
+  struct wlr_box old_geo = self->geo;
+
+  bool layer_changed = false;
+  if (wlr_layer_surface->current.committed != 0) {
+    layer_changed = self->layer != wlr_layer_surface->current.layer;
+
+    /* Invalidate the layer the surface previously belonged to */
+    if (layer_changed)
+      phoc_output_set_layer_dirty (output, self->layer);
+
+    self->layer = wlr_layer_surface->current.layer;
+    phoc_layer_shell_arrange (output);
+    phoc_layer_shell_update_focus ();
+  }
+
+  /* Cursor changes which happen as a consequence of resizing a layer
+   * surface are applied in phoc_layer_shell_arrange. Because the resize happens
+   * before the underlying surface changes, it will only receive a cursor
+   * update if the new cursor position crosses the *old* sized surface in
+   * the *new* layer surface.
+   * Another cursor move event is needed when the surface actually changes. */
+  struct wlr_surface *surface = wlr_layer_surface->surface;
+  if (surface->WLR_PRIVATE.previous.width != surface->current.width ||
+      surface->WLR_PRIVATE.previous.height != surface->current.height) {
+    phoc_layer_shell_update_cursors (self);
+  }
+
+  bool geo_changed = memcmp (&old_geo, &self->geo, sizeof (struct wlr_box)) != 0;
+  if (geo_changed || layer_changed) {
+    phoc_output_damage_from_surface (output,
+                                     wlr_layer_surface->surface,
+                                     old_geo.x,
+                                     old_geo.y,
+                                     TRUE);
+    phoc_output_damage_from_surface (output,
+                                     wlr_layer_surface->surface,
+                                     self->geo.x,
+                                     self->geo.y,
+                                     TRUE);
+  } else {
+    phoc_output_damage_from_surface (output,
+                                     wlr_layer_surface->surface,
+                                     self->geo.x,
+                                     self->geo.y,
+                                     FALSE);
+  }
+
+  /* Exclusive zone changes affect the surface ordering in a layer */
+  exclusive_zone_changed = !!(wlr_layer_surface->current.committed &
+                              WLR_LAYER_SURFACE_V1_STATE_EXCLUSIVE_ZONE);
+  if (layer_changed || exclusive_zone_changed)
+    phoc_output_set_layer_dirty (output, self->layer);
+
+  if (self->pending_serial &&
+      self->layer_surface->current.configure_serial >= self->pending_serial) {
+    g_debug ("layer-surface ack'ed serial %d", self->layer_surface->current.configure_serial);
+    phoc_layout_transaction_notify_layer_configured (phoc_layout_transaction_get_default ());
+    self->pending_serial = 0;
+  }
+}
+
+
+static void
+phoc_layer_surface_init_subsurfaces (PhocLayerSurface *self)
+{
+  struct wlr_subsurface *subsurface;
+  struct wlr_surface *wlr_surface = self->layer_surface->surface;
+
+  wl_list_for_each (subsurface, &wlr_surface->current.subsurfaces_below, current.link)
+    phoc_subsurface_new (PHOC_CHILD_ROOT (self), subsurface);
+
+  wl_list_for_each (subsurface, &wlr_surface->current.subsurfaces_above, current.link)
+    phoc_subsurface_new (PHOC_CHILD_ROOT (self), subsurface);
+}
+
+
+static void
+handle_new_subsurface (struct wl_listener *listener, void *data)
+{
+  PhocLayerSurface *self = wl_container_of (listener, self, new_subsurface);
+  struct wlr_subsurface *wlr_subsurface = data;
+
+  phoc_subsurface_new (PHOC_CHILD_ROOT (self), wlr_subsurface);
+}
+
+
+static void
+handle_new_popup (struct wl_listener *listener, void *data)
+{
+  PhocLayerSurface *self = wl_container_of (listener, self, new_popup);
+  struct wlr_xdg_popup *wlr_popup = data;
+
+  phoc_xdg_popup_new (PHOC_CHILD_ROOT (self), wlr_popup);
+}
+
+
+static void
+handle_map (struct wl_listener *listener, void *data)
+{
+  PhocLayerSurface *self = wl_container_of (listener, self, map);
+  struct wlr_layer_surface_v1 *wlr_layer_surface = self->layer_surface;
+  PhocOutput *output = phoc_layer_surface_get_output (self);
+
+  if (!output)
+    return;
+
+  self->mapped = true;
+
+  phoc_layer_surface_init_subsurfaces (self);
+  self->new_subsurface.notify = handle_new_subsurface;
+  wl_signal_add (&wlr_layer_surface->surface->events.new_subsurface, &self->new_subsurface);
+
+  phoc_output_damage_from_surface (output,
+                                   wlr_layer_surface->surface,
+                                   self->geo.x,
+                                   self->geo.y,
+                                   TRUE);
+
+  phoc_utils_wlr_surface_enter_output (wlr_layer_surface->surface, output->wlr_output);
+
+  phoc_layer_shell_arrange (output);
+  phoc_layer_shell_update_focus ();
+}
+
+
+static void
+phoc_layer_surface_drop_child_surfaces (PhocLayerSurface *self)
+{
+  GSList *elem = self->child_surfaces;
+  while (elem != NULL) {
+    GSList *next = elem->next;
+    PhocViewChild *child = PHOC_VIEW_CHILD (elem->data);
+
+    /* The child removes itself form the list on dispose */
+    g_object_unref (child);
+    elem = next;
+  }
+
+  /* Check if all children removed themselves properly */
+  g_assert (self->child_surfaces == NULL);
+}
+
+
+static void
+handle_unmap (struct wl_listener *listener, void *data)
+{
+  PhocInput *input = phoc_server_get_input (phoc_server_get_default ());
+  PhocLayerSurface *self = wl_container_of (listener, self, unmap);
+  PhocOutput *output = phoc_layer_surface_get_output (self);
+
+  self->mapped = false;
+
+  wl_list_remove (&self->new_subsurface.link);
+  phoc_layer_surface_drop_child_surfaces (self);
+
+  phoc_layer_surface_damage_whole (self);
+  phoc_input_update_cursor_focus (input);
+
+  if (output) {
+    phoc_layer_shell_arrange (output);
+    phoc_output_set_layer_dirty (output, self->layer);
+  }
+  phoc_layer_shell_update_focus ();
+}
+
+
+static void
+handle_destroy (struct wl_listener *listener, void *data)
+{
+  PhocLayerSurface *self = wl_container_of (listener, self, destroy);
+
+  g_object_unref (self);
 }
 
 
@@ -106,12 +450,32 @@ static void
 phoc_layer_surface_constructed (GObject *object)
 {
   PhocLayerSurface *self = PHOC_LAYER_SURFACE (object);
+  PhocOutput *output;
 
   G_OBJECT_CLASS (phoc_layer_surface_parent_class)->constructed (object);
 
   /* wlr signals */
   self->output_destroy.notify = handle_output_destroy;
   wl_signal_add (&self->layer_surface->output->events.destroy, &self->output_destroy);
+
+  self->destroy.notify = handle_destroy;
+  wl_signal_add (&self->layer_surface->events.destroy, &self->destroy);
+
+  self->map.notify = handle_map;
+  wl_signal_add (&self->layer_surface->surface->events.map, &self->map);
+
+  self->unmap.notify = handle_unmap;
+  wl_signal_add (&self->layer_surface->surface->events.unmap, &self->unmap);
+
+  self->new_popup.notify = handle_new_popup;
+  wl_signal_add (&self->layer_surface->events.new_popup, &self->new_popup);
+
+  self->surface_commit.notify = handle_surface_commit;
+  wl_signal_add (&self->layer_surface->surface->events.commit, &self->surface_commit);
+
+  /* Add to the list of layer surfaces on the output */
+  output = PHOC_OUTPUT (self->layer_surface->output->data);
+  wl_list_insert (&output->layer_surfaces, &self->link);
 }
 
 
@@ -121,20 +485,22 @@ phoc_layer_surface_finalize (GObject *object)
   PhocLayerSurface *self = PHOC_LAYER_SURFACE (object);
   PhocOutput *output = phoc_layer_surface_get_output (self);
 
-  if (self->layer_surface->surface->mapped)
-    phoc_layer_surface_unmap (self);
+  g_assert (!self->layer_surface->surface->mapped);
 
   wl_list_remove (&self->link);
+  if (output)
+    phoc_output_set_layer_dirty (output, self->layer);
+
   wl_list_remove (&self->destroy.link);
   wl_list_remove (&self->map.link);
   wl_list_remove (&self->unmap.link);
   wl_list_remove (&self->surface_commit.link);
+  wl_list_remove (&self->new_popup.link);
+
   if (output) {
     g_assert (PHOC_IS_OUTPUT (output));
     phoc_output_remove_frame_callbacks_by_animatable (output, PHOC_ANIMATABLE (self));
     wl_list_remove (&self->output_destroy.link);
-    phoc_layer_shell_arrange (output);
-    phoc_layer_shell_update_focus ();
   }
 
   G_OBJECT_CLASS (phoc_layer_surface_parent_class)->finalize (object);
@@ -179,34 +545,10 @@ phoc_layer_surface_init (PhocLayerSurface *self)
 PhocLayerSurface *
 phoc_layer_surface_new (struct wlr_layer_surface_v1 *layer_surface)
 {
-  return PHOC_LAYER_SURFACE (g_object_new (PHOC_TYPE_LAYER_SURFACE,
-                                           "wlr-layer-surface", layer_surface,
-                                           NULL));
+  return g_object_new (PHOC_TYPE_LAYER_SURFACE,
+                       "wlr-layer-surface", layer_surface,
+                       NULL);
 }
-
-
-/**
- * phoc_layer_surface_unmap:
- * @self: The layer surface to unmap
- *
- * Unmaps a layer surface
- */
-void
-phoc_layer_surface_unmap (PhocLayerSurface *self)
-{
-  struct wlr_layer_surface_v1 *layer_surface;
-  struct wlr_output *wlr_output;
-
-  g_assert (PHOC_IS_LAYER_SURFACE (self));
-  layer_surface = self->layer_surface;
-
-  wlr_output = layer_surface->output;
-  if (wlr_output != NULL) {
-    phoc_output_damage_whole_local_surface(wlr_output->data, layer_surface->surface,
-                                           self->geo.x, self->geo.y);
-  }
-}
-
 
 /**
  * phoc_layer_surface_get_namespace:
@@ -268,4 +610,137 @@ phoc_layer_surface_get_alpha (PhocLayerSurface *self)
   g_assert (PHOC_IS_LAYER_SURFACE (self));
 
   return self->alpha;
+}
+
+/**
+ * phoc_layer_surface_get_layer:
+ * @self: The layer surface
+ *
+ * Get the layer surface's current layer
+ *
+ * Returns: the current layer
+ */
+enum zwlr_layer_shell_v1_layer
+phoc_layer_surface_get_layer (PhocLayerSurface *self)
+{
+  g_assert (PHOC_IS_LAYER_SURFACE (self));
+
+  return self->layer;
+}
+
+/**
+ * phoc_layer_surface_get_mapped:
+ * @self: The layer surface
+ *
+ * Get whether the layer surface is currently mapped
+ *
+ * Returns: `TRUE` if the surface is currently mapped, otherwise `FALSE`
+ */
+gboolean
+phoc_layer_surface_get_mapped (PhocLayerSurface *self)
+{
+  g_assert (PHOC_IS_LAYER_SURFACE (self));
+
+  return self->mapped;
+}
+
+/**
+ * phoc_layer_surface_covers_output:
+ * @self: The layer surface
+ *
+ * Check whether the given layer surface fully covers its output
+ *
+ * Returns: `TRUE` if the surface fully covers its output, otherwise `FALSE`
+ */
+gboolean
+phoc_layer_surface_covers_output (PhocLayerSurface *self)
+{
+  struct wlr_surface *wlr_surface;
+
+  g_assert (PHOC_IS_LAYER_SURFACE (self));
+
+  if (!self->layer_surface)
+    return FALSE;
+
+  if (!self->mapped)
+    return FALSE;
+
+  if (!self->layer_surface->output)
+    return FALSE;
+
+  if (self->layer_surface->current.anchor != (ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
+                                              ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT |
+                                              ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
+                                              ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM)) {
+    return FALSE;
+  }
+
+  if (self->layer_surface->current.exclusive_zone != -1)
+    return FALSE;
+
+  if (!G_APPROX_VALUE (self->alpha, 1.0, FLT_EPSILON))
+    return FALSE;
+
+  wlr_surface = self->layer_surface->surface;
+  if (!wlr_surface)
+    return FALSE;
+
+  /* Buffer uses opaque pixel format or is opaque single pixel buffer */
+  if (wlr_surface->buffer && wlr_buffer_is_opaque ((struct wlr_buffer *)wlr_surface->buffer)) {
+    return TRUE;
+  }
+
+  /* Surface's opaque region covers the whole surface */
+  pixman_box32_t box = {0, 0, wlr_surface->current.width, wlr_surface->current.height};
+  if (pixman_region32_contains_rectangle (&wlr_surface->opaque_region, &box)) {
+    return TRUE;
+  }
+
+  return FALSE;
+}
+
+/**
+ * phoc_layer_surface_send_configure:
+ * @self: The layer surface
+ *
+ * Send a configure event with the current width and height.
+ *
+ * Send a configure event to the client informing it about the current width and height.
+ * See [method@LayerSurface.get_geometry].
+ */
+void
+phoc_layer_surface_send_configure (PhocLayerSurface *self)
+{
+  guint32 pending_serial;
+  g_assert (PHOC_IS_LAYER_SURFACE (self));
+
+  /* We're not part of a transaction yet but need to */
+  if (!self->pending_serial)
+    phoc_layout_transaction_add_layer_dirty (phoc_layout_transaction_get_default ());
+
+  pending_serial = wlr_layer_surface_v1_configure (self->layer_surface,
+                                                   self->geo.width,
+                                                   self->geo.height);
+  g_debug ("Layersurface %p: current pending serial: %d, new pending serial %d",
+           self,
+           self->pending_serial,
+           pending_serial);
+  self->pending_serial = pending_serial;
+}
+
+/**
+ * phoc_layer_surface_get_serial:
+ * @self: The layer surface
+ *
+ * Gets the serial of the last configure event sent to the client. If 0 then client
+ * has committed a buffer matching the current geometry.
+ *
+ * Returns: the last serial
+ */
+uint32_t
+phoc_layer_surface_get_pending_serial (PhocLayerSurface *self)
+{
+  g_assert (PHOC_IS_LAYER_SURFACE (self));
+
+  return self->pending_serial;
 }

@@ -17,7 +17,6 @@
 #include <wayland-server-core.h>
 #include <wlr/config.h>
 #include <wlr/render/wlr_texture.h>
-#include <wlr/types/wlr_matrix.h>
 #include <phosh-private-protocol.h>
 #include <wlr-screencopy-unstable-v1-protocol.h>
 #include "server.h"
@@ -26,11 +25,6 @@
 #include "utils.h"
 
 #include <drm_fourcc.h>
-
-/* help older (0.8.2) libxkbcommon */
-#ifndef XKB_KEY_XF86RotationLockToggle
-# define XKB_KEY_XF86RotationLockToggle 0x1008FFB7
-#endif
 
 /**
  * PhocPhoshPrivate:
@@ -172,11 +166,10 @@ phoc_phosh_private_keyboard_event_accelerator_is_registered (PhocKeyCombo       
 static bool
 phoc_phosh_private_accelerator_already_subscribed (PhocKeyCombo *combo)
 {
+  PhocDesktop *desktop = phoc_server_get_desktop (phoc_server_get_default ());
+  PhocPhoshPrivate *phosh = phoc_desktop_get_phosh_private (desktop);
   GList *l;
   PhocPhoshPrivateKeyboardEventData *kbevent;
-  PhocServer *server = phoc_server_get_default ();
-
-  PhocPhoshPrivate *phosh = phoc_desktop_get_phosh_private (server->desktop);
 
   for (l = phosh->keyboard_events; l != NULL; l = l->next) {
     kbevent = (PhocPhoshPrivateKeyboardEventData *)l->data;
@@ -199,6 +192,15 @@ keysym_is_subscribeable (PhocKeyCombo *combo)
   if (combo->keysym >= XKB_KEY_XF86MonBrightnessUp && combo->keysym <= XKB_KEY_XF86RotationLockToggle)
     return true;
 
+  /* more of these but from a block of mostly deprecated symbols so we add them
+   * explicitly */
+  switch (combo->keysym) {
+  case XKB_KEY_XF86Screensaver:
+    return true;
+  default:
+    break;
+  }
+
   if (combo->keysym == XKB_KEY_Super_L || combo->keysym == XKB_KEY_Super_R)
     return true;
 
@@ -219,7 +221,7 @@ phoc_phosh_private_keyboard_event_grab_accelerator_request (struct wl_client   *
   gint64 *new_key;
 
   PhocPhoshPrivateKeyboardEventData *kbevent = phoc_phosh_private_keyboard_event_from_resource (resource);
-  g_autofree PhocKeyCombo *combo = phoc_parse_accelerator (accelerator);
+  g_autofree PhocKeyCombo *combo = phoc_keybindings_parse_accelerator (accelerator, NULL);
 
   if (kbevent == NULL)
     return;
@@ -742,12 +744,13 @@ static void
 phoc_phosh_private_constructed (GObject *object)
 {
   PhocPhoshPrivate *self = PHOC_PHOSH_PRIVATE (object);
-  struct wl_display *display = phoc_server_get_default ()->wl_display;
+  struct wl_display *wl_display = phoc_server_get_wl_display (phoc_server_get_default ());
 
   G_OBJECT_CLASS (phoc_phosh_private_parent_class)->constructed (object);
 
   g_info ("Initializing phosh private interface");
-  self->global = wl_global_create (display, &phosh_private_interface, PHOSH_PRIVATE_VERSION, self, phosh_private_bind);
+  self->global = wl_global_create (wl_display, &phosh_private_interface,
+                                   PHOSH_PRIVATE_VERSION, self, phosh_private_bind);
 }
 
 
@@ -798,7 +801,7 @@ phoc_phosh_private_init (PhocPhoshPrivate *self)
 PhocPhoshPrivate *
 phoc_phosh_private_new (void)
 {
-  return PHOC_PHOSH_PRIVATE (g_object_new (PHOC_TYPE_PHOSH_PRIVATE, NULL));
+  return g_object_new (PHOC_TYPE_PHOSH_PRIVATE, NULL);
 }
 
 
@@ -807,9 +810,9 @@ phoc_phosh_private_forward_keysym (PhocKeyCombo *combo,
                                    uint32_t      timestamp,
                                    bool          pressed)
 {
+  PhocDesktop *desktop = phoc_server_get_desktop (phoc_server_get_default ());
+  PhocPhoshPrivate *phosh = phoc_desktop_get_phosh_private (desktop);
   GList *l;
-  PhocServer *server = phoc_server_get_default ();
-  PhocPhoshPrivate *phosh = phoc_desktop_get_phosh_private (server->desktop);
   bool forwarded = false;
 
   for (l = phosh->keyboard_events; l != NULL; l = l->next) {

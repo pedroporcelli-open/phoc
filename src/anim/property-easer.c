@@ -87,7 +87,7 @@ G_DEFINE_TYPE (PhocPropertyEaser, phoc_property_easer, G_TYPE_OBJECT)
  *
  * Since: 1.0
  */
-static double
+double
 phoc_lerp (double a, double b, double t)
 {
   /* a + (b - a) * t */
@@ -137,7 +137,7 @@ set_target (PhocPropertyEaser *self, GObject *target)
 static guint
 set_props_variant (PhocPropertyEaser *self, GVariant *variant)
 {
-  const gchar *name;
+  const char *name;
   guint n_params = 0;
   GVariantIter iter;
   double start, end;
@@ -302,9 +302,9 @@ phoc_property_easer_init (PhocPropertyEaser *self)
 PhocPropertyEaser *
 phoc_property_easer_new (GObject *target)
 {
-  return PHOC_PROPERTY_EASER (g_object_new (PHOC_TYPE_PROPERTY_EASER,
-                                            "target", target,
-                                            NULL));
+  return g_object_new (PHOC_TYPE_PROPERTY_EASER,
+                       "target", target,
+                       NULL);
 }
 
 /**
@@ -388,10 +388,10 @@ phoc_property_easer_get_easing (PhocPropertyEaser *self)
 
 static guint
 phoc_property_easer_set_props_valist (PhocPropertyEaser *self,
-                                      const gchar       *first_property_name,
+                                      const char        *first_property_name,
                                       va_list            var_args)
 {
-  const gchar *name;
+  const char *name;
   guint n_params = 0;
 
   name = first_property_name;
@@ -425,7 +425,7 @@ phoc_property_easer_set_props_valist (PhocPropertyEaser *self,
     g_hash_table_insert (self->ease_props, g_strdup (name), ease_prop);
 
     n_params++;
-  } while ((name = va_arg (var_args, const gchar *)));
+  } while ((name = va_arg (var_args, const char *)));
 
   phoc_property_easer_set_progress (self, 0.0);
 
@@ -443,7 +443,7 @@ phoc_property_easer_set_props_valist (PhocPropertyEaser *self,
  */
 guint
 phoc_property_easer_set_props (PhocPropertyEaser *self,
-                               const gchar       *first_property_name,
+                               const char        *first_property_name,
                                ...)
 {
   guint n;

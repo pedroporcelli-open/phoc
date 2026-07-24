@@ -10,18 +10,21 @@
 
 #include "phoc-config.h"
 
+#include "color-rect.h"
+#include "output-shield.h"
 #include "phoc-animation.h"
 #include "server.h"
-#include "output-shield.h"
+#include "spinner.h"
 
 #include "render-private.h"
 
-#define PHOC_ANIM_DURATION_SHIELD_UP 250 /* ms */
+#define PHOC_ANIM_DURATION_SHIELD_MS 250 /* ms */
+#define SPINNER_SIZE 32
 
 enum {
   PROP_0,
-  PROP_ALPHA,
   PROP_OUTPUT,
+  PROP_EASING,
   PROP_LAST_PROP
 };
 static GParamSpec *props[PROP_LAST_PROP];
@@ -31,15 +34,16 @@ static GParamSpec *props[PROP_LAST_PROP];
  *
  * A shield that covers a whole `PhocOutput`. It can be raised (to cover
  * the whole screen) and lowered to show the screens content.
- *
- * TODO: Use PhocColorRect to simplify
  */
 struct _PhocOutputShield {
   GObject             parent;
 
-  float               alpha;
+  PhocColorRect      *color_rect;
+  PhocSpinner        *spinner;
   PhocOutput         *output;
   PhocTimedAnimation *animation;
+  PhocPropertyEaser  *easer;
+
   gulong              render_end_id;
 };
 
@@ -83,15 +87,6 @@ set_output (PhocOutputShield *self, PhocOutput *output)
 
 
 static void
-set_alpha (PhocOutputShield *self, float alpha)
-{
-  g_assert (alpha >= 0.0 && alpha <= 1.0);
-
-  self->alpha = alpha;
-}
-
-
-static void
 phoc_output_shield_set_property (GObject      *object,
                                  guint         property_id,
                                  const GValue *value,
@@ -100,11 +95,11 @@ phoc_output_shield_set_property (GObject      *object,
   PhocOutputShield *self = PHOC_OUTPUT_SHIELD (object);
 
   switch (property_id) {
-  case PROP_ALPHA:
-    set_alpha (self, g_value_get_float (value));
-    break;
   case PROP_OUTPUT:
     set_output (self, g_value_get_object (value));
+    break;
+  case PROP_EASING:
+    phoc_output_shield_set_easing (self, g_value_get_enum (value));
     break;
   default:
     G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -122,11 +117,11 @@ phoc_output_shield_get_property (GObject    *object,
   PhocOutputShield *self = PHOC_OUTPUT_SHIELD (object);
 
   switch (property_id) {
-  case PROP_ALPHA:
-    g_value_set_float (value, self->alpha);
-    break;
   case PROP_OUTPUT:
     g_value_set_object (value, self->output);
+    break;
+  case PROP_EASING:
+    g_value_set_enum (value, phoc_property_easer_get_easing (self->easer));
     break;
   default:
     G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -138,44 +133,58 @@ phoc_output_shield_get_property (GObject    *object,
 static void
 stop_render (PhocOutputShield *self)
 {
-  PhocRenderer *renderer = phoc_server_get_default ()->renderer;
+  PhocRenderer *renderer = phoc_server_get_renderer (phoc_server_get_default ());
 
-  g_clear_signal_handler (&self->render_end_id, renderer);
+  phoc_bling_unmap (PHOC_BLING (self->color_rect));
+  if (self->spinner)
+    phoc_bling_unmap (PHOC_BLING (self->spinner));
+
+  if (renderer)
+    g_clear_signal_handler (&self->render_end_id, renderer);
 }
 
 
 
 static void
-on_render (PhocOutputShield *self, PhocOutput *output, PhocRenderer *renderer)
+on_render (PhocOutputShield *self, PhocRenderContext *ctx)
 {
-  struct wlr_output *wlr_output;
-  struct wlr_box box;
-  struct wlr_renderer *wlr_renderer;
-  float color[4] = {0.0f, 0.0f, 0.0f, 1.0f};
-
-  if (self->output == NULL)
+  if (self->output == NULL || self->output != ctx->output)
     return;
 
-  g_debug ("%s: alpha: %f", __func__, self->alpha);
-  wlr_output = self->output->wlr_output;
-  box = (struct wlr_box){ 0, 0, wlr_output->width, wlr_output->height };
-  wlr_renderer = phoc_renderer_get_wlr_renderer (renderer);
-
-  color[3] = self->alpha;
-  wlr_render_rect (wlr_renderer, &box, color, wlr_output->transform_matrix);
-
-  /* Damage covers the whole output */
-  phoc_output_damage_whole (self->output);
+  phoc_bling_render (PHOC_BLING (self->color_rect), ctx);
+  if (self->spinner)
+    phoc_bling_render (PHOC_BLING (self->spinner), ctx);
 }
 
 
 static void
-start_render (PhocOutputShield *self)
+start_render (PhocOutputShield *self, gboolean show_spinner)
 {
-  PhocRenderer *renderer = phoc_server_get_default ()->renderer;
+  PhocServer *server = phoc_server_get_default ();
+  PhocDesktop *desktop = phoc_server_get_desktop (server);
+  PhocRenderer *renderer = phoc_server_get_renderer (server);
+  PhocBox output_box;
+  struct wlr_output *output = self->output->wlr_output;
 
   if (self->render_end_id)
     return;
+
+  wlr_output_layout_get_box (desktop->layout, output, &output_box);
+
+  phoc_color_rect_set_box (self->color_rect, &output_box);
+  phoc_bling_map (PHOC_BLING (self->color_rect));
+
+  if (show_spinner && !self->spinner) {
+    int lx, ly;
+
+    lx = output_box.x + output_box.width * 0.5 - SPINNER_SIZE * 0.5;
+    ly = output_box.y + output_box.height * 0.5 - SPINNER_SIZE * 0.5;
+
+    self->spinner = phoc_spinner_new (PHOC_ANIMATABLE (self), lx, ly, SPINNER_SIZE);
+  }
+
+  if (show_spinner)
+    phoc_bling_map (PHOC_BLING (self->spinner));
 
   self->render_end_id = g_signal_connect_swapped (renderer,
                                                   "render-end",
@@ -193,43 +202,17 @@ on_animation_done (PhocOutputShield *self)
 
 
 static void
-phoc_output_shield_constructed (GObject *object)
-{
-  PhocOutputShield *self = PHOC_OUTPUT_SHIELD (object);
-
-  g_autoptr (PhocTimedAnimation) fade_anim = NULL;
-  g_autoptr (PhocPropertyEaser) easer = NULL;
-
-  G_OBJECT_CLASS (phoc_output_shield_parent_class)->constructed (object);
-
-  easer = g_object_new (PHOC_TYPE_PROPERTY_EASER,
-                        "target", self,
-                        "easing", PHOC_EASING_EASE_IN_CUBIC,
-                        NULL);
-  phoc_property_easer_set_props (easer,
-                                 "alpha", 1.0, 0.0,
-                                 NULL);
-
-  fade_anim = g_object_new (PHOC_TYPE_TIMED_ANIMATION,
-                            "animatable", self,
-                            "duration", PHOC_ANIM_DURATION_SHIELD_UP,
-                            "property-easer", easer,
-                            NULL);
-  g_set_object (&self->animation, fade_anim);
-
-  g_signal_connect_swapped (self->animation, "done",
-                            G_CALLBACK (on_animation_done),
-                            self);
-}
-
-
-static void
 phoc_output_shield_finalize (GObject *object)
 {
   PhocOutputShield *self = PHOC_OUTPUT_SHIELD (object);
 
   set_output (self, NULL);
   stop_render (self);
+
+  g_clear_object (&self->color_rect);
+  g_clear_object (&self->easer);
+  g_clear_object (&self->animation);
+  g_clear_object (&self->spinner);
 
   G_OBJECT_CLASS (phoc_output_shield_parent_class)->finalize (object);
 }
@@ -250,20 +233,7 @@ phoc_output_shield_class_init (PhocOutputShieldClass *klass)
 
   object_class->get_property = phoc_output_shield_get_property;
   object_class->set_property = phoc_output_shield_set_property;
-  object_class->constructed = phoc_output_shield_constructed;
   object_class->finalize = phoc_output_shield_finalize;
-
-  /**
-   * PhocOutputShield:alpha:
-   *
-   * The current transparency of this shield.
-   */
-  props[PROP_ALPHA] =
-    g_param_spec_float ("alpha", "", "",
-                        0,
-                        1.0,
-                        1.0,
-                        G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
   /**
    * PhocOutputShield:output:
@@ -274,6 +244,16 @@ phoc_output_shield_class_init (PhocOutputShieldClass *klass)
     g_param_spec_object ("output", "", "",
                          PHOC_TYPE_OUTPUT,
                          G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY | G_PARAM_STATIC_STRINGS);
+  /**
+   * PhocOutputShield:easing:
+   *
+   * The easing function to use
+   */
+  props[PROP_EASING] =
+    g_param_spec_enum ("easing", "", "",
+                       PHOC_TYPE_EASING,
+                       PHOC_EASING_EASE_IN_CUBIC,
+                       G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
   g_object_class_install_properties (object_class, PROP_LAST_PROP, props);
 }
@@ -282,36 +262,58 @@ phoc_output_shield_class_init (PhocOutputShieldClass *klass)
 static void
 phoc_output_shield_init (PhocOutputShield *self)
 {
+  g_autoptr (PhocTimedAnimation) fade_anim = NULL;
+
+  self->color_rect = phoc_color_rect_new (&(PhocBox){}, &(PhocColor){0.0f, 0.0f, 0.0f, 1.0f});
+
+  self->easer = g_object_new (PHOC_TYPE_PROPERTY_EASER,
+                              "target", self->color_rect,
+                              "easing", PHOC_EASING_EASE_IN_CUBIC,
+                              NULL);
+  phoc_property_easer_set_props (self->easer,
+                                 "alpha", 1.0, 0.0,
+                                 NULL);
+
+  fade_anim = g_object_new (PHOC_TYPE_TIMED_ANIMATION,
+                            "animatable", self,
+                            "duration", PHOC_ANIM_DURATION_SHIELD_MS,
+                            "property-easer", self->easer,
+                            NULL);
+  g_set_object (&self->animation, fade_anim);
+
+  g_signal_connect_swapped (self->animation, "done",
+                            G_CALLBACK (on_animation_done),
+                            self);
 }
 
 
 PhocOutputShield *
 phoc_output_shield_new (PhocOutput *output)
 {
-  return PHOC_OUTPUT_SHIELD (g_object_new (PHOC_TYPE_OUTPUT_SHIELD,
-                                           "output", output,
-                                           NULL));
+  return g_object_new (PHOC_TYPE_OUTPUT_SHIELD,
+                       "output", output,
+                       NULL);
 }
 
 
 /**
  * phoc_output_shield_raise:
  * @self: The shield
+ * @show_spinner: Whether to show a spinner on the raised shield
  *
- * Draw the shield to cover the whole output.
+ * Draw the shield to cover the whole output. A spinner can optionally be displayed on the shield.
  */
 void
-phoc_output_shield_raise (PhocOutputShield *self)
+phoc_output_shield_raise (PhocOutputShield *self, gboolean show_spinner)
 {
   g_return_if_fail (PHOC_IS_OUTPUT_SHIELD (self));
 
   phoc_timed_animation_skip (self->animation);
 
-  set_alpha (self, 1.0);
-  phoc_output_damage_whole (self->output);
-  start_render (self);
-}
+  phoc_color_rect_set_alpha (self->color_rect, 1.0f);
 
+  start_render (self, show_spinner);
+}
 
 /**
  * phoc_output_shield_lower
@@ -324,6 +326,43 @@ phoc_output_shield_lower (PhocOutputShield *self)
 {
   g_return_if_fail (PHOC_IS_OUTPUT_SHIELD (self));
 
-  start_render (self);
+  start_render (self, false);
   phoc_timed_animation_play (self->animation);
+  g_clear_object (&self->spinner);
+}
+
+
+void
+phoc_output_shield_set_easing (PhocOutputShield *self, PhocEasing easing)
+{
+  g_assert (PHOC_IS_OUTPUT_SHIELD (self));
+
+  phoc_property_easer_set_easing (self->easer, easing);
+}
+
+
+void
+phoc_output_shield_set_duration (PhocOutputShield *self, guint duration)
+{
+  g_assert (PHOC_IS_OUTPUT_SHIELD (self));
+
+  if (duration == 0)
+    duration = PHOC_ANIM_DURATION_SHIELD_MS;
+
+  phoc_timed_animation_set_duration (self->animation, duration);
+}
+
+/**
+ * phoc_output_shield_is_raised:
+ * @self: The shield
+ *
+ * Check whether the shield is currently fully up (raised). We return  `FALSE`
+ * when the shield is either down or already fading out.
+ */
+gboolean
+phoc_output_shield_is_raised (PhocOutputShield *self)
+{
+  g_assert (PHOC_IS_OUTPUT_SHIELD (self));
+
+  return G_APPROX_VALUE (phoc_color_rect_get_alpha (self->color_rect), 1.0, FLT_EPSILON);
 }

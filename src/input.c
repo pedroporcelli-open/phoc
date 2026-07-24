@@ -2,11 +2,6 @@
 
 #include "phoc-config.h"
 
-#define _POSIX_C_SOURCE 200112L
-#include <assert.h>
-#include <stdlib.h>
-#include <time.h>
-#include <wayland-server-core.h>
 #include "cursor.h"
 #include "input.h"
 #include "seat.h"
@@ -21,7 +16,7 @@ struct _PhocInput {
   GObject              parent;
 
   struct wl_listener   new_input;
-  GSList              *seats; // PhocSeat
+  GSList              *seats; /* (element-type PhocSeat) */
 };
 
 G_DEFINE_TYPE (PhocInput, phoc_input, G_TYPE_OBJECT);
@@ -38,7 +33,7 @@ phoc_input_get_device_type (enum wlr_input_device_type type)
     return "switch";
   case WLR_INPUT_DEVICE_TOUCH:
     return "touch";
-  case WLR_INPUT_DEVICE_TABLET_TOOL:
+  case WLR_INPUT_DEVICE_TABLET:
     return "tablet tool";
   case WLR_INPUT_DEVICE_TABLET_PAD:
     return "tablet pad";
@@ -68,9 +63,8 @@ phoc_input_get_seat (PhocInput *self, char *name)
     seat = PHOC_SEAT (elem->data);
 
     g_assert (PHOC_IS_SEAT (seat));
-    if (strcmp (seat->seat->name, name) == 0) {
+    if (strcmp (seat->seat->name, name) == 0)
       return seat;
-    }
   }
 
   seat = phoc_seat_new (self, name);
@@ -90,13 +84,14 @@ handle_new_input (struct wl_listener *listener, void *data)
 
   seat = phoc_input_get_seat (self, seat_name);
   if (!seat) {
-    g_warning ("could not create PhocSeat");
+    g_warning ("Couldn't create seat");
     return;
   }
 
-  g_debug ("New input device: %s (%d:%d) %s seat:%s", device->name,
-           device->vendor, device->product,
-           phoc_input_get_device_type (device->type), seat_name);
+  g_debug ("New input device: %s %s seat:%s",
+           device->name,
+           phoc_input_get_device_type (device->type),
+           seat_name);
 
   phoc_seat_add_device (seat, device);
 }
@@ -107,14 +102,14 @@ phoc_input_constructed (GObject *object)
 {
   PhocInput *self = PHOC_INPUT (object);
   PhocServer *server = phoc_server_get_default ();
+  struct wlr_backend *wlr_backend = phoc_server_get_backend (server);
 
   g_debug ("Initializing phoc input");
-  g_assert (server->desktop);
 
   G_OBJECT_CLASS (phoc_input_parent_class)->constructed (object);
 
   self->new_input.notify = handle_new_input;
-  wl_signal_add (&server->backend->events.new_input, &self->new_input);
+  wl_signal_add (&wlr_backend->events.new_input, &self->new_input);
 
   /* Add the default seat */
   phoc_input_get_seat (self, PHOC_CONFIG_DEFAULT_SEAT_NAME);
@@ -124,6 +119,8 @@ static void
 phoc_input_finalize (GObject *object)
 {
   PhocInput *self = PHOC_INPUT (object);
+
+  wl_list_remove (&self->new_input.link);
 
   g_clear_slist (&self->seats, g_object_unref);
 
@@ -163,9 +160,8 @@ phoc_input_view_has_focus (PhocInput *self, PhocView *view)
     PhocSeat *seat = PHOC_SEAT (elem->data);
 
     g_assert (PHOC_IS_SEAT (seat));
-    if (view == phoc_seat_get_focus_view (seat)) {
+    if (view == phoc_seat_get_focus_view (seat))
       return true;
-    }
   }
 
   return false;
@@ -182,17 +178,17 @@ phoc_input_update_cursor_focus (PhocInput *self)
 {
   struct timespec now;
 
-  g_assert (PHOC_IS_INPUT (self));
+  if (!self)
+    return;
 
+  g_assert (PHOC_IS_INPUT (self));
   clock_gettime (CLOCK_MONOTONIC, &now);
-  g_assert_nonnull (self);
 
   for (GSList *elem = phoc_input_get_seats (self); elem; elem = elem->next) {
     PhocSeat *seat = PHOC_SEAT (elem->data);
 
     g_assert (PHOC_IS_SEAT (seat));
-    phoc_cursor_update_position (phoc_seat_get_cursor (seat),
-                                 timespec_to_msec (&now));
+    phoc_cursor_update_position (phoc_seat_get_cursor (seat), timespec_to_msec (&now));
   }
 }
 
@@ -227,10 +223,8 @@ phoc_input_get_last_active_seat (PhocInput *self)
     PhocSeat *_seat = PHOC_SEAT (elem->data);
 
     g_assert (PHOC_IS_SEAT (_seat));
-    if (!seat || (seat->seat->last_event.tv_sec > _seat->seat->last_event.tv_sec &&
-                  seat->seat->last_event.tv_nsec > _seat->seat->last_event.tv_nsec)) {
+    if (!seat || phoc_seat_get_last_event_ts (seat) > phoc_seat_get_last_event_ts (_seat))
       seat = _seat;
-    }
   }
   return seat;
 }

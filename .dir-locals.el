@@ -3,6 +3,11 @@
             (c-file-style . "linux")
             (indent-tabs-mode . nil)
             (c-basic-offset . 2)
+            (display-fill-column-indicator-column . 100)
+            (c-backslash-max-column . 92)
+            ))
+ (rust-mode . (
+            (indent-tabs-mode . nil)
             ))
  (setq auto-mode-alist (cons '("\\.ui$" . nxml-mode) auto-mode-alist))
  (nxml-mode . (

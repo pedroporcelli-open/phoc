@@ -1,3 +1,329 @@
+phoc 0.56.0
+-----------
+Released July 2026
+* Update to wlroots 0.20.1
+* Some internal cleanups and fixes
+* New protocol support:
+    * xdg-toplevel-tag-v1
+* Contributors:
+    * Guido Günther
+* UI translations:
+    * Ekaterine Papava (ka)
+
+phoc 0.55.0
+-----------
+Released May 2026
+* Update to wlroots 0.20.0
+* Use a margin when tiling left/right
+* Add a focus frame
+* (Hopefully) handle GPU resets better
+* Better handle modal dialogs via xdg-dialog-v1 and gtk-shell
+* New protocol support:
+    * xdg-dialog-v1
+    * ext-data-control-manager-v1
+* Various bug fixes
+* Issues fixed:
+    * https://gitlab.gnome.org/World/Phosh/phoc/-/issues/365
+    * https://gitlab.gnome.org/World/Phosh/phoc/-/issues/199
+* Contributors:
+    * Guido Günther
+* UI translations:
+    * Ryo Nakano (ja)
+    * nicole mikołajczyk (de) (ja) (pl)
+
+phoc 0.54.0
+-----------
+Released April 2026
+* Workspace focus improvements
+* X11 override-redirect handling improvements
+* Multiple bug fixes, internal cleanups and improvements
+* Update to wlroots 0.19.3
+* Issues fixed:
+    * https://gitlab.gnome.org/World/Phosh/phoc/-/issues/351
+    * https://gitlab.gnome.org/World/Phosh/phoc/-/issues/352
+    * https://gitlab.gnome.org/World/Phosh/phoc/-/issues/425
+    * https://gitlab.gnome.org/World/Phosh/phoc/-/issues/428
+    * https://gitlab.gnome.org/World/Phosh/phoc/-/issues/429
+    * https://gitlab.gnome.org/World/Phosh/phoc/-/issues/44
+* Contributors:
+    * Gotam Gorabh
+    * Guido Günther
+
+phoc 0.53.0
+-----------
+Released February 2026
+* New protocol support:
+  * xx-cutouts-v1 protocol: Allow clients to receive display cutout information
+* Improvements:
+  * Handle `Above_Tab` pseudo keysym
+  * Allow to cycle through windows on a workspace
+  * Allow apps to stay fullscreen when losing focus (helps e.g. full screen games)
+* Bug fixes:
+  * Bump default buffer size to avoid some busy Wayland clients from being disconnected
+  * Fix issue preventing some GTK3 popups activatable via mouse
+  * Fix some initially fullscreen X11 apps getting resized to 1x1 pixels (thus seemingly
+    disappearing) when unfullscreened.
+* Another round of internal cleanups and improvements
+* Issues fixed:
+    * https://gitlab.gnome.org/World/Phosh/phoc/-/issues/406
+    * https://gitlab.gnome.org/World/Phosh/phoc/-/issues/386
+* Contributors:
+    * Arun Mani J
+    * Guido Günther
+    * Teemu Ikonen
+
+phoc 0.52.0
+-----------
+Released January 2026
+* Fix preedit related issue that made preedit reappear in e.g. Chatty or Flare
+* cutouts: Handle different corner radii
+* Internal cleanups preparing for xdg-cutouts support
+* Fix some shutdown corner case crashes
+* Issues fixed:
+    * https://gitlab.com/schmiddi-on-mobile/flare/-/issues/272#note_2900347912
+* Contributors:
+    * Guido Günther
+
+phoc 0.51.0
+-----------
+Released November 2025
+* Update to wlroots 0.19.2
+* Exit cleanly on SIGTERM
+* Internal cleanups and robustness fixes
+* Contributors:
+    * Gotam Gorabh
+    * Guido Günther
+    * Sebastian Krzyszkowiak
+
+phoc 0.50.0
+-----------
+Released September 2025
+* Initial workspace support
+* Usual bunch of bug fixes
+* Issues fixed:
+    * https://gitlab.gnome.org/World/Phosh/phoc/-/issues/415
+* Contributors:
+    * Evangelos Ribeiro Tzaras
+    * Guido Günther
+    * Sebastian Krzyszkowiak
+
+phoc 0.49.0
+-----------
+Released August 2025
+* Add initial sysprof support
+* Reject input in shell mode when shell is not up
+* Add debug option to damage whole output
+* Fix (use after free) crash on shell unlock
+* Fix popup related crash
+* Fix clang+musl build
+* Issues fixed:
+    * https://gitlab.gnome.org/World/Phosh/phoc/-/issues/411
+    * https://gitlab.gnome.org/World/Phosh/phoc/-/issues/228
+* Contributors:
+    * Achill Gilgenast
+    * Guido Günther
+
+phoc 0.48.0
+-----------
+Released June 2025
+* Update to wlroots 0.19.0
+* Save output configurations and restore them in the
+  single output case. Note: configuration in phoc.ini takes
+  precedence.
+* Support adapative-sync
+* New protocol support:
+  - shortcuts-inhibit
+  - ext-image-capture-source-v1
+  - ext-image-capture-copy-v1
+* Updated protocol support:
+  - wp_presentation time version 2
+* Issues fixed:
+    * https://gitlab.gnome.org/World/Phosh/phoc/-/issues/405
+* Contributors:
+    * Andrey Skvortsov
+    * Guido Günther
+
+phoc 0.47.0
+-----------
+Released May 2025
+* Allow to use wlroot's Vulkan renderer
+* Several crash and robustness fixes
+* Add --socket and --no-xwayland options
+* Issues fixed:
+    * https://gitlab.gnome.org/World/Phosh/phoc/-/issues/399
+* Contributors:
+    * Guido Günther
+
+phoc 0.46.0
+-----------
+Released March 2025
+* New protocols: ext-foreign-toplevel-info, alpha-modifier-v1 protocol
+* Add (optional) spinner animation to output shield
+* Unify layer-surface and xdg-surface subsurface and popup handling
+* Check `ID_INPUT_KEYBOARD` to identify hardware keyboards. This
+  allows e.g. flip phones to mark their T9 style keyboard as such.
+* Allow X11 surfaces to use transparency
+* Fix subsurface scaling when rendering to buffer
+* Avoid stale inhibitors when forwarding to gnome-session
+* Another round of fixes, internal cleanups and improvements
+* Issues fixed:
+    * https://gitlab.gnome.org/World/Phosh/phoc/-/issues/395
+    * https://gitlab.gnome.org/World/Phosh/phoc/-/issues/398
+* Contributors:
+    * Guido Günther
+    * Sam Day
+    * Sebastian Krzyszkowiak
+
+phoc 0.45.0
+-----------
+Released February 2025
+* Use wlroots 0.18.x API (currently 0.18.2)
+* Support xdg-shell's surface suspend for fully occluded windows
+  (e.g. when screen is locked)
+* Smoothen output mode/scale/transform changes
+* Fix touch point and damage tracking debugging
+* Allow to enable/disable touch point and damage tracking debugging at
+  runtime
+* Allow to tweak logging at runtime
+* Allow for more useful startup logging
+* Lots of internal modernization, cleanup and robustness fixes
+* Improve popup reposition and submit less but more correct damage
+* Backport several fixes and cleanups from our branch tracking
+  wlroots 0.19.x
+* Make `PhocViewChild` and `PhocView` a bit more boring
+* Issues fixed:
+    * https://gitlab.gnome.org/World/Phosh/phosh/-/issues/1161
+    * https://gitlab.gnome.org/World/Phosh/phoc/-/issues/389
+    * https://gitlab.gnome.org/World/Phosh/phoc/-/issues/383
+* Contributors:
+    * Guido Günther
+
+phoc 0.44.0
+-----------
+Released December 2024
+* Don't crash when foreign-toplevel requests (un)fullscreen
+* Don't forget to notify about unfullscreen when tiling
+* Internal cleanups for wlroots 0.18/0.19 switch
+* Contributors:
+    * Guido Günther
+
+phoc 0.43.0
+-----------
+Released November 2024
+* Fix interaction between predit and pointer
+* Fix flickering text bubbles in e.g. GTK4 text selection
+* Disable direct scan out when we need the shell overlay
+* Fix possible crash with XWayland surfaces
+* Only show cursor when there was mouse movement
+* Support cursor themes
+* More cleanups and fixes
+* Issues fixed:
+    * https://gitlab.gnome.org/World/Phosh/phoc/-/issues/381
+    * https://gitlab.gnome.org/World/Phosh/phoc/-/issues/382
+* Contributors:
+    * Evangelos Ribeiro Tzaras
+    * Guido Günther
+    * Sebastian Krzyszkowiak
+
+phoc 0.42.0
+-----------
+Released September 2024
+* Try harder to preserve preedit. This should make the behavior of on
+  screen keyboards that feature text prediction/correction (like
+  e.g. phosh-osk-stub) more predictable.
+* Your usual round of internal cleanups
+* Contributors:
+    * Guido Günther
+
+phoc 0.41.0
+-----------
+Released August 2024
+* Don't crash when idle-inhibit changes frequently
+* Don't accept fling gesture when swiping in a non
+  swipeable direction
+* Issues fixed:
+    * https://gitlab.gnome.org/World/Phosh/phoc/-/issues/375
+    * https://gitlab.gnome.org/World/Phosh/phoc/-/issues/380
+* Contributors:
+    * Guido Günther
+
+phoc 0.40.1
+-----------
+Released July 2024
+* Fix crash when OSK changes layers
+* Contributors:
+    * Guido Günther
+
+phoc 0.40.0
+-----------
+Released June 2024
+* Detect fling gesture on layer surfaces
+* Update to wlroots 0.17.3
+* Apply drm panel orientation. This can be disabled via
+  phoc.ini. This might require adjustments to the mount matrix to make sensor
+  orientation match screen orientation.
+* Fix assertions and crashes related to output removal
+* Allow to tweak layer surface stacking
+* Issues fixed:
+    * https://gitlab.gnome.org/World/Phosh/phoc/-/issues/284
+    * https://gitlab.gnome.org/World/Phosh/phosh/-/issues/792
+    * https://gitlab.gnome.org/World/Phosh/phoc/-/issues/257
+    * https://gitlab.gnome.org/World/Phosh/phoc/-/issues/155
+    * https://gitlab.gnome.org/World/Phosh/phoc/-/issues/192
+* Contributors:
+    * Guido Günther
+
+phoc 0.39.0
+-----------
+Released May 2024
+* Allow to configure what unidles / unblanks the screen via GM_WAKUP_KEY_* udev
+  attributes
+* Animate always-on-top toggling
+* Fix window cycle order
+* Speed up build by separating generated sources and headers
+* Documentation improvements
+* Issues fixed:
+    * https://gitlab.gnome.org/World/Phosh/phoc/-/issues/363
+* Contributors:
+    * Guido Günther
+    * MoonlightWave-12
+    * Sam Day
+
+phoc 0.38.0
+-----------
+Released April 2024
+* Allow views to be always-on-top
+* Allow move-to-corner via keybindings
+* Allow clients to check if there's a hardware keyboard
+* Update to wlroots 0.17.2
+* Fractional scale fixes
+* Bump layer-shell version to 3
+* Make Subsurfaces and Popups GObjects
+* More internal cleanups and fixes
+* Validate more files during build
+* Issues fixed:
+  * https://gitlab.gnome.org/World/Phosh/phoc/-/issues/98
+  * https://gitlab.gnome.org/World/Phosh/phoc/-/issues/364
+  * https://gitlab.gnome.org/World/Phosh/phoc/-/issues/342
+* Contributors:
+    * Guido Günther
+
+phoc 0.37.0
+-----------
+Released March 2024
+* Switch to wlr_render_pass
+* Allow to configure an output's scale-filte rmode
+* Support fractional-scale-v1 protocol
+* More bugfixes, internal restructuring and cleanups
+* Improve output mapping when running nested
+* Issues fixed:
+  * https://gitlab.gnome.org/World/Phosh/phoc/-/issues/344
+  * https://gitlab.gnome.org/World/Phosh/phoc/-/issues/346
+  * https://gitlab.gnome.org/World/Phosh/phoc/-/issues/345
+* Contributors:
+    * Guido Günther
+    * Sergey Lisov
+
 phoc 0.36.0
 -----------
 Released February 2024
@@ -12,7 +338,7 @@ Released February 2024
 
 phoc 0.35.0
 -----------
-Released Januar 2024
+Released January 2024
 * Make using dtrace probes easy and add some useful tracing scripts
 * Fix more popup and fullscreen related issues
 * Update to wlroots 0.17.1

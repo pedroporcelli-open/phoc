@@ -1,0 +1,23 @@
+/*
+ * Copyright (C) 2025 Phosh.mobi e.V.
+ *
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
+#pragma once
+
+#include "child-root.h"
+#include "view-child-private.h"
+
+#include <glib-object.h>
+
+G_BEGIN_DECLS
+
+#define PHOC_TYPE_SUBSURFACE (phoc_subsurface_get_type ())
+
+G_DECLARE_FINAL_TYPE (PhocSubsurface, phoc_subsurface, PHOC, SUBSURFACE, PhocViewChild)
+
+PhocSubsurface *        phoc_subsurface_new (PhocChildRoot         *root,
+                                             struct wlr_subsurface *wlr_subsurface);
+
+G_END_DECLS

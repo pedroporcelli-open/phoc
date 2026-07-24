@@ -123,10 +123,13 @@ set_dispose_on_done (PhocTimedAnimation *self, gboolean dispose_on_done)
 static void
 stop_animation (PhocTimedAnimation *self)
 {
-  if (self->frame_callback_id) {
+  if (!self->frame_callback_id)
+    return;
+
+  if (self->animatable)
     phoc_animatable_remove_frame_callback (self->animatable, self->frame_callback_id);
-    self->frame_callback_id = 0;
-  }
+
+  self->frame_callback_id = 0;
 }
 
 
@@ -269,9 +272,7 @@ phoc_timed_animation_class_init (PhocTimedAnimationClass *klass)
    * The animatable that drives the frame clock.
    */
   props[PROP_ANIMATABLE] =
-    g_param_spec_object ("animatable",
-                         "",
-                         "",
+    g_param_spec_object ("animatable", "", "",
                          PHOC_TYPE_ANIMATABLE,
                          G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY | G_PARAM_STATIC_STRINGS);
 
@@ -282,9 +283,7 @@ phoc_timed_animation_class_init (PhocTimedAnimationClass *klass)
    * properties to ease in the timed animation.
    */
   props[PROP_PROPERTY_EASER] =
-    g_param_spec_object ("property-easer",
-                         "",
-                         "",
+    g_param_spec_object ("property-easer", "", "",
                          PHOC_TYPE_PROPERTY_EASER,
                          G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY |
                          G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
@@ -295,12 +294,8 @@ phoc_timed_animation_class_init (PhocTimedAnimationClass *klass)
    * The duration of the animation in milliseconds.
    */
   props[PROP_DURATION] =
-    g_param_spec_int ("duration",
-                      "",
-                      "",
-                      0,
-                      G_MAXINT,
-                      0,
+    g_param_spec_int ("duration", "", "",
+                      0, G_MAXINT, 0,
                       G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
   /**
    * PhocTimedAnimation:dispose-on-done:
@@ -312,9 +307,7 @@ phoc_timed_animation_class_init (PhocTimedAnimationClass *klass)
    * forget" animations.
    */
   props[PROP_DISPOSE_ON_DONE] =
-    g_param_spec_boolean ("dispose-on-done",
-                          "",
-                          "",
+    g_param_spec_boolean ("dispose-on-done", "", "",
                           FALSE,
                           G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY | G_PARAM_STATIC_STRINGS);
   /**
@@ -323,12 +316,12 @@ phoc_timed_animation_class_init (PhocTimedAnimationClass *klass)
    * The current state of the animation.
    */
   props[PROP_STATE] =
-    g_param_spec_enum ("state",
-                       "",
-                       "",
+    g_param_spec_enum ("state", "", "",
                        PHOC_TYPE_ANIMATION_STATE,
                        PHOC_TIMED_ANIMATION_IDLE,
                        G_PARAM_READABLE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
+
+  g_object_class_install_properties (object_class, PROP_LAST_PROP, props);
 
   /**
    * PhocAnimation::tick:
@@ -357,8 +350,6 @@ phoc_timed_animation_class_init (PhocTimedAnimationClass *klass)
                   NULL, NULL, NULL,
                   G_TYPE_NONE,
                   0);
-
-  g_object_class_install_properties (object_class, PROP_LAST_PROP, props);
 }
 
 
@@ -371,7 +362,7 @@ phoc_timed_animation_init (PhocTimedAnimation *self)
 PhocTimedAnimation *
 phoc_timed_animation_new (void)
 {
-  return PHOC_TIMED_ANIMATION (g_object_new (PHOC_TYPE_TIMED_ANIMATION, NULL));
+  return g_object_new (PHOC_TYPE_TIMED_ANIMATION, NULL);
 }
 
 
@@ -487,9 +478,9 @@ phoc_timed_animation_skip (PhocTimedAnimation *self)
 
   g_signal_emit (self, signals[DONE], 0);
   if (self->dispose_on_done) {
-    g_object_unref (self);
     /* Only do this once */
     self->dispose_on_done = FALSE;
+    g_object_unref (self);
   }
 }
 

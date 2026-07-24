@@ -70,7 +70,7 @@ can be specified as `*` to match any value. The configuration options are:
 
 - `enable=[true|false]`: Whether the output should be enabled
 - `x`, `y`: The `x` and `y` position in the output layout. This can be used to arrange outputs.
-  The default is to use auto layouting (new outputs are added to the right of the current layout).
+  The default is to use automatic layout (new outputs are added to the right of the current layout).
 - `scale`: The outputs scale. The default `auto` calculates the scale based on the screen size.
 - `rotate`: The rotation. Valid values are `normal`, `90`, `180`,
   `270`, `flipped`, `flipped-90`, `flipped-180` and `flipped-270`. The default is to use
@@ -78,6 +78,13 @@ can be specified as `*` to match any value. The configuration options are:
 - `mode`: The mode to use. The mode must be a valid mode for this output. See e.g. the output of `wlr-randr`.
   The default is to use the outputs preferred mode.
 - `modeline`: A custom video mode. This is only valid for the DRM backend
+- `scale-filter`: Filter to use to scale down textures. Valid values are `bilinear`, `nearest` and `auto`.
+  The later selects `bilinear` for fractional and `nearest` for integer scales automatically. If unset
+  `auto` is assumed.
+- `drm-panel-orientation`: If `true` applies the panel orientation read from the DRM connector
+  (if available). Defaults to `true`.
+- `phys_width`, `phys_height`: The physical dimensions of the display in `mm`.
+- `adaptive-sync`: If set to `enabled`, enables variable refresh rate, `disabled` or absent disables it.
 
 Example:
 

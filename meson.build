@@ -1,18 +1,16 @@
-project('phoc', 'c',
-          version: '0.36.0',
-          license: 'GPLv3+',
-    meson_version: '>= 0.63.0',
-  default_options: [
-    'warning_level=1',
-    'buildtype=debugoptimized',
-    'c_std=gnu11',
-  ],
+project(
+  'phoc',
+  'c',
+  version: '0.56.0',
+  license: 'GPLv3+',
+  meson_version: '>= 0.63.0',
+  default_options: ['warning_level=1', 'buildtype=debugoptimized', 'c_std=gnu11'],
 )
 
-add_project_arguments([
-  '-DWLR_USE_UNSTABLE',
-  '-I' + meson.project_build_root(),
-], language: 'c')
+add_project_arguments(
+  ['-DWLR_USE_UNSTABLE', '-DGMOBILE_USE_UNSTABLE_API', '-I' + meson.project_build_root()],
+  language: 'c',
+)
 
 root_inc = include_directories('.')
 src_inc = include_directories('src')
@@ -22,55 +20,61 @@ prefix = get_option('prefix')
 bindir = prefix / get_option('bindir')
 datadir = prefix / get_option('datadir')
 localedir = prefix / get_option('localedir')
-desktopdir = prefix / datadir / 'applications'
-pkgdatadir = prefix / datadir / meson.project_name()
+desktopdir = datadir / 'applications'
+pkgdatadir = datadir / meson.project_name()
 
 cc = meson.get_compiler('c')
 
-glib_ver = '2.70'
-glib_ver_str = 'GLIB_VERSION_@0@'.format(glib_ver.replace('.','_'))
+glib_ver = '2.80'
+glib_ver_str = 'GLIB_VERSION_@0@'.format(glib_ver.replace('.', '_'))
 glib_ver_cmp = '>=@0@'.format(glib_ver)
 
-gio            = dependency('gio-2.0', version: glib_ver_cmp)
-glib           = dependency('glib-2.0', version: glib_ver_cmp)
-gobject        = dependency('gobject-2.0', version: glib_ver_cmp)
+gio = dependency('gio-2.0', version: glib_ver_cmp)
+glib = dependency('glib-2.0', version: glib_ver_cmp)
+gobject = dependency('gobject-2.0', version: glib_ver_cmp)
+glesv2 = dependency('glesv2')
+gnome_desktop = dependency('gnome-desktop-3.0', version: '>=3.26')
 gsettings_desktop_schemas_dep = dependency('gsettings-desktop-schemas')
-input          = dependency('libinput')
-drm            = dependency('libdrm')
-pixman         = dependency('pixman-1')
-wayland_client = dependency('wayland-client')
+input = dependency('libinput', version: '>= 1.27.0')
+udev = dependency('libudev')
+drm = dependency('libdrm')
+pixman = dependency('pixman-1', version: '>= 0.43.4')
+wayland_client = dependency('wayland-client', version: '>= 1.23.1')
 wayland_protos = dependency('wayland-protocols', version: '>=1.15')
-wayland_server = dependency('wayland-server')
-xkbcommon      = dependency('xkbcommon')
-xkbregistry    = dependency('xkbregistry')
-math           = cc.find_library('m')
-gmobile_dep    = dependency('gmobile', version: '>= 0.0.3')
-
+wayland_server = dependency('wayland-server', version: '>= 1.23.1')
+xkbcommon = dependency('xkbcommon')
+math = cc.find_library('m')
+gmobile_dep = dependency(
+  'gmobile',
+  version: '>= 0.6.0',
+  fallback: ['gmobile', 'gmobile_dep'],
+  default_options: ['examples=false', 'introspection=false', 'gtk_doc=false', 'tests=false'],
+)
+gvdb_dep = subproject('gvdb', default_options: ['tests=false']).get_variable('gvdb_dep')
 embed_wlroots = get_option('embed-wlroots')
 
 if not embed_wlroots.disabled()
-   # Try first to find wlroots as a subproject, then as a system dependency
-   wlroots_proj = subproject(
-        'wlroots',
-        default_options: ['examples=false', 'renderers=gles2'],
-        required: false,
-   )
+  # Try first to find wlroots as a subproject, then as a system dependency
+  wlroots_proj = subproject(
+    'wlroots',
+    default_options: ['examples=false', 'renderers=gles2,vulkan'],
+    required: false,
+  )
 
-   if embed_wlroots.enabled() and not wlroots_proj.found()
-        error('Wlroots subproject not found but enabled')
-   endif
+  if embed_wlroots.enabled() and not wlroots_proj.found()
+    error('Wlroots subproject not found but enabled')
+  endif
 endif
 
 if not embed_wlroots.disabled() and wlroots_proj.found()
-        wlroots = wlroots_proj.get_variable('wlroots')
+  wlroots = wlroots_proj.get_variable('wlroots')
 else
-        wlroots = dependency('wlroots', version: ['>= 0.17.0', '< 0.18.0'])
+  wlroots = dependency('wlroots-0.20', version: '>= 0.20.1')
 endif
-wlroots_has_xwayland = wlroots.get_variable(pkgconfig: 'have_xwayland',
-                                            internal: 'have_xwayland') == 'true'
+wlroots_has_xwayland = wlroots.get_variable(pkgconfig: 'have_xwayland', internal: 'have_xwayland') == 'true'
 
 if get_option('xwayland').enabled() and not wlroots_has_xwayland
-        error('Cannot enable Xwayland in phoc: wlroots has been built without Xwayland support')
+  error('Cannot enable Xwayland in phoc: wlroots has been built without Xwayland support')
 endif
 have_xwayland = get_option('xwayland').enabled()
 
@@ -85,8 +89,19 @@ if not get_option('dtrace').disabled()
   use_dtrace = has_sdt
 endif
 
+use_sysprof = false
+sysprof_capture = dependency(
+  'sysprof-capture-4',
+  version: '>= 48',
+  required: get_option('sysprof').enabled(),
+)
+if not get_option('sysprof').disabled()
+  use_sysprof = sysprof_capture.found()
+endif
+
 global_c_args = []
 test_c_args = [
+  '-fanalyzer',
   '-Wcast-align',
   '-Wdate-time',
   ['-Werror=format-security', '-Werror=format=2'],
@@ -136,63 +151,49 @@ if cc.get_id() == 'clang'
   c_args += '-Wno-cast-align'
 endif
 
-add_project_arguments(
-  c_args,
-  language: 'c'
-)
+add_project_arguments(c_args, language: 'c')
 
 gnome = import('gnome')
-i18n  = import('i18n')
+i18n = import('i18n')
 
 config_h = configuration_data()
 config_h.set_quoted('GETTEXT_PACKAGE', meson.project_name())
 config_h.set_quoted('LOCALEDIR', localedir)
-config_h.set_quoted('PHOC_APP_ID', 'sm.puri.Phoc')
+config_h.set_quoted('PHOC_APP_ID', 'mobi.phosh.Phoc')
 config_h.set_quoted('PHOC_VERSION', meson.project_version())
-config_h.set('PHOC_XWAYLAND', have_xwayland,
-	     description: 'Whether xwayland is enabled')
-config_h.set('PHOC_USE_DTRACE', use_dtrace,
-	     description: 'Whether tracing via dtrace/stp is enabled')
+config_h.set('PHOC_XWAYLAND', have_xwayland, description: 'Whether xwayland is enabled')
+config_h.set('PHOC_USE_DTRACE', use_dtrace, description: 'Whether tracing via dtrace/stp is enabled')
+config_h.set('PHOC_USE_SYSPROF', use_sysprof, description: 'Whether tracing via sysprof is enabled')
 
-phoc_config_h = configure_file(
-  output: 'phoc-config.h',
-  configuration: config_h,
-)
+phoc_config_h = configure_file(output: 'phoc-config.h', configuration: config_h)
 
 subdir('po')
 subdir('protocols')
+subdir('data')
 subdir('src')
 subdir('tests')
-subdir('helpers')
-subdir('data')
+subdir('tools')
 subdir('doc')
 subdir('examples')
 
 run_data = configuration_data()
 run_data.set('ABS_BUILDDIR', meson.current_build_dir())
 run_data.set('ABS_SRCDIR', meson.current_source_dir())
-configure_file(
-  input: 'run.in',
-  output: 'run',
-  configuration: run_data)
+configure_file(input: 'run.in', output: 'run', configuration: run_data)
 
-summary({
-     'wlroots version': wlroots.version(),
-     'wlroots as submodule': not embed_wlroots.disabled() and wlroots_proj.found(),
-     'Xwayland': have_xwayland,
-     'Documentation': get_option('gtk_doc'),
-     'Manual pages': get_option('man'),
-     'Tracing': use_dtrace,
+summary(
+  {
+    'wlroots version': wlroots.version(),
+    'wlroots as subproject': not embed_wlroots.disabled() and wlroots_proj.found(),
+    'Xwayland': have_xwayland,
+    'Documentation': get_option('gtk_doc'),
+    'Manual pages': get_option('man'),
+    'Tracing (dtrace)': use_dtrace,
+    'Tracing (sysprof)': use_sysprof,
+    'Tests': get_option('tests'),
   },
   bool_yn: true,
   section: 'Build',
 )
 
-# gnome.post_install() is available since meson 0.59.0
-# Distributions use their own tooling (e.g. postinst, triggers, etc)
-# so it is okay if the post_install() is not run on distro builds
-if meson.version().version_compare('>=0.59.0')
-  gnome.post_install(
-    glib_compile_schemas: true,
-  )
-endif
+gnome.post_install(glib_compile_schemas: true)

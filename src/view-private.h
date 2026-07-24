@@ -14,12 +14,21 @@ G_BEGIN_DECLS
 void             view_set_title                      (PhocView *self, const char *title);
 void             view_set_parent                     (PhocView *self, PhocView *parent);
 void             phoc_view_setup                     (PhocView *self);
-void             view_send_frame_done_if_not_visible (PhocView *self);
 void             view_update_position                (PhocView *self, int x, int y);
 void             view_update_size                    (PhocView *self, int width, int height);
 void             phoc_view_set_initial_focus         (PhocView *self);
 void             phoc_view_map                       (PhocView *self, struct wlr_surface *surface);
 void             phoc_view_unmap                     (PhocView *self);
 void             phoc_view_apply_damage              (PhocView *self);
+void             phoc_view_set_pending_box           (PhocView *self,
+                                                      bool      update_x,
+                                                      bool      update_y,
+                                                      double    x,
+                                                      double    y,
+                                                      uint32_t  width,
+                                                      uint32_t  height);
+void             phoc_view_set_modal                 (PhocView *self, gboolean modal);
+void             phoc_view_set_tag                   (PhocView *self, const char *tag);
+
 
 G_END_DECLS

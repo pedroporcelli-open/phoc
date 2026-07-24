@@ -1,37 +1,52 @@
 subdir('anim')
+subdir('dbus')
 
 phoc_enum_headers = files(
-  [
-    'phosh-private.h',
-    'layer-shell-effects.h',
-    'event.h',
-  ])
-phoc_enum_sources = gnome.mkenums_simple(
-  'phoc-enums',
-  sources : phoc_enum_headers)
+  'event.h',
+  'layer-shell-effects.h',
+  'output.h',
+  'phosh-private.h',
+  'server.h',
+  'view.h',
+)
+if have_xwayland
+  phoc_enum_headers += ['xwayland-unmanaged.h']
+endif
 
-phoc_marshalers = gnome.genmarshal('phoc-marshalers',
-  sources : 'phoc-marshalers.list',
-  prefix : '_phoc_marshal',
-  valist_marshallers : true)
+phoc_enum_sources = gnome.mkenums_simple('phoc-enums', sources: phoc_enum_headers)
+
+phoc_marshalers = gnome.genmarshal(
+  'phoc-marshalers',
+  sources: 'phoc-marshalers.list',
+  prefix: '_phoc_marshal',
+  valist_marshallers: true,
+)
 
 sources = files(
   'bling.c',
   'bling.h',
+  'cairo-texture.c',
+  'cairo-texture.h',
+  'child-root.c',
+  'child-root.h',
   'color-rect.c',
   'color-rect.h',
   'cursor.c',
   'cursor.h',
-  'cutouts-overlay.c',
-  'cutouts-overlay.h',
+  'debug-control.c',
+  'debug-control.h',
+  'desktop-xwayland.c',
+  'desktop-xwayland.h',
   'desktop.c',
   'desktop.h',
   'device-state.c',
   'device-state.h',
+  'drag-icon.c',
+  'drag-icon.h',
   'event.c',
   'event.h',
-  'gesture.h',
-  'gesture.c',
+  'focus-frame.c',
+  'focus-frame.h',
   'gesture-drag.c',
   'gesture-drag.h',
   'gesture-single.c',
@@ -40,72 +55,122 @@ sources = files(
   'gesture-swipe.h',
   'gesture-zoom.c',
   'gesture-zoom.h',
+  'gesture.c',
+  'gesture.h',
   'gtk-shell.c',
   'gtk-shell.h',
   'idle-inhibit.c',
   'idle-inhibit.h',
-  'input.c',
-  'input.h',
   'input-device.c',
   'input-device.h',
-  'keyboard.c',
-  'keyboard.h',
+  'input-method-relay.c',
+  'input-method-relay.h',
+  'input.c',
+  'input.h',
   'keybindings.c',
   'keybindings.h',
+  'keyboard.c',
+  'keyboard.h',
+  'layer-shell-effects.c',
+  'layer-shell-effects.h',
+  'layer-shell.c',
+  'layer-shell.h',
   'layer-surface.c',
   'layer-surface.h',
-  'layer_shell.c',
-  'layer-shell-effects.h',
-  'layer-shell-effects.c',
-  'layers.h',
-  'output.c',
-  'output.h',
+  'layout-transaction.c',
+  'layout-transaction.h',
+  'output-cutouts.c',
+  'output-cutouts.h',
   'output-shield.c',
   'output-shield.h',
-  'phoc-types.h',
+  'output.c',
+  'output.h',
+  'outputs-states.c',
+  'outputs-states.h',
+  'phoc-tracing.c',
+  'phoc-tracing.h',
   'phoc-types.c',
+  'phoc-types.h',
   'phosh-private.c',
   'phosh-private.h',
   'pointer.c',
   'pointer.h',
+  'render-private.h',
   'render.c',
   'render.h',
-  'render-private.h',
   'seat.c',
   'seat.h',
   'server.c',
   'server.h',
   'settings.c',
   'settings.h',
+  'shortcuts-inhibit.c',
+  'shortcuts-inhibit.h',
+  'spinner.c',
+  'spinner.h',
+  'style-manager.c',
+  'style-manager.h',
+  'subsurface.c',
+  'subsurface.h',
+  'surface.c',
+  'surface.h',
   'switch.c',
   'switch.h',
+  'tablet-pad.c',
+  'tablet-pad.h',
+  'tablet-tool.c',
+  'tablet-tool.h',
   'tablet.c',
   'tablet.h',
-  'text_input.c',
-  'text_input.h',
+  'touch-point.c',
+  'touch-point.h',
   'touch.c',
   'touch.h',
   'utils.c',
   'utils.h',
-  'view.c',
-  'view.h',
+  'view-child-private.h',
+  'view-child.c',
   'view-deco.c',
   'view-deco.h',
+  'view.c',
+  'view.h',
   'virtual.c',
   'virtual.h',
+  'workspace-indicator.c',
+  'workspace-indicator.h',
+  'workspace-manager.c',
+  'workspace-manager.h',
+  'workspace.c',
+  'workspace.h',
   'xdg-activation-v1.c',
   'xdg-activation-v1.h',
-  'xdg_shell.c',
-  'xdg-surface.c',
-  'xdg-surface.h',
+  'xdg-dialog.c',
+  'xdg-dialog.h',
+  'xdg-popup.c',
+  'xdg-popup.h',
+  'xdg-toplevel-decoration.c',
+  'xdg-toplevel-decoration.h',
+  'xdg-toplevel.c',
+  'xdg-toplevel.h',
+  'xx-cutouts-v1.c',
+  'xx-cutouts-v1.h',
 ) + phoc_anim_sources
+
 libphoc_generated_sources = [
-  phoc_config_h,
-  phoc_anim_enum_sources,
-  phoc_enum_sources,
-  phoc_marshalers,
-  server_protos_headers,
+  phoc_anim_enum_sources[0],
+  phoc_dbus_sources,
+  phoc_enum_sources[0],
+  phoc_marshalers[0],
   protos_sources,
+]
+
+libphoc_generated_headers = [
+  phoc_config_h,
+  phoc_anim_enum_sources[1],
+  phoc_dbus_headers,
+  phoc_enum_sources[1],
+  phoc_marshalers[1],
+  server_protos_headers,
 ]
 
 phoc_deps = [
@@ -114,8 +179,11 @@ phoc_deps = [
   gio,
   gmobile_dep,
   gsettings_desktop_schemas_dep,
+  gvdb_dep,
   math,
   pixman,
+  sysprof_capture,
+  udev,
   wayland_server,
   wlroots,
   xkbcommon,
@@ -123,9 +191,12 @@ phoc_deps = [
 ]
 
 if have_xwayland
-  sources += ['xwayland-surface.c',
-              'xwayland-surface.h',
-             ]
+  sources += [
+    'xwayland-surface.c',
+    'xwayland-surface.h',
+    'xwayland-unmanaged.c',
+    'xwayland-unmanaged.h',
+  ]
   phoc_deps += dependency('xcb')
 endif
 
@@ -133,51 +204,46 @@ phoc_lib = both_libraries(
   'phoc',
   sources,
   libphoc_generated_sources,
+  libphoc_generated_headers,
   include_directories: phoc_anim_inc,
   dependencies: phoc_deps,
   install: false,
 )
 
+libphoc_inc_dirs = [include_directories('.'), phoc_anim_inc, phoc_dbus_inc, protocol_inc]
+
 libphoc_dep = declare_dependency(
-  include_directories: [include_directories('.'),
-                        phoc_anim_inc,
-                        protocol_inc],
+  include_directories: libphoc_inc_dirs,
   link_with: phoc_lib,
   dependencies: phoc_deps,
-  sources: libphoc_generated_sources)
+  sources: libphoc_generated_headers,
+)
 
 libphoc_static_dep = declare_dependency(
-  include_directories: [include_directories('.'),
-                        phoc_anim_inc,
-                        protocol_inc],
+  include_directories: libphoc_inc_dirs,
   link_with: phoc_lib.get_static_lib(),
   dependencies: phoc_deps,
-  sources: libphoc_generated_sources)
+  sources: libphoc_generated_headers,
+)
 
 if get_option('gtk_doc')
-  phoc_gir_extra_args = [
-    '--quiet',
-  ]
+  phoc_gir_extra_args = ['--quiet']
 
-  gir_sources = sources + phoc_anim_enum_sources + phoc_enum_sources
+  gir_sources = sources + phoc_anim_enum_sources + phoc_enum_sources + phoc_dbus_sources
 
-  phoc_gir = gnome.generate_gir(phoc_lib,
-                 sources: gir_sources,
-               nsversion: '0',
-               namespace: 'Phoc',
-         export_packages: 'phoc-0',
-           symbol_prefix: 'phoc',
-       identifier_prefix: 'Phoc',
-                includes: ['Gio-2.0'],
-                 install: false,
-              extra_args: phoc_gir_extra_args,
-            dependencies: [phoc_deps, libphoc_dep],
-   )
+  phoc_gir = gnome.generate_gir(
+    phoc_lib,
+    sources: gir_sources,
+    nsversion: '0',
+    namespace: 'Phoc',
+    export_packages: 'phoc-0',
+    symbol_prefix: 'phoc',
+    identifier_prefix: 'Phoc',
+    includes: ['Gio-2.0'],
+    install: false,
+    extra_args: phoc_gir_extra_args,
+    dependencies: [phoc_deps, libphoc_dep],
+  )
 endif
 
-executable(
-  'phoc',
-  sources: 'main.c',
-  dependencies: libphoc_static_dep,
-  install: true,
-)
+executable('phoc', sources: 'main.c', dependencies: libphoc_static_dep, install: true)

@@ -14,7 +14,9 @@
 static void
 test_phoc_client_noop (void)
 {
-  phoc_test_client_run (TEST_PHOC_CLIENT_TIMEOUT, NULL, NULL);
+  PhocTestClientIface iface = { 0 };
+
+  phoc_test_client_run (TEST_PHOC_CLIENT_TIMEOUT, &iface, NULL);
 }
 
 static gboolean
@@ -24,9 +26,9 @@ create_surface (PhocTestClientGlobals *globals, gpointer data)
 
   surface = wl_compositor_create_surface (globals->compositor);
 
-  g_assert_nonnull(surface);
+  g_assert_nonnull (surface);
 
-  wl_surface_destroy(surface);
+  wl_surface_destroy (surface);
   return TRUE;
 }
 
@@ -38,13 +40,13 @@ test_phoc_client_surface (void)
   phoc_test_client_run (TEST_PHOC_CLIENT_TIMEOUT, &iface, NULL);
 }
 
-gint
-main (gint argc, gchar *argv[])
+int
+main (int argc, char *argv[])
 {
   g_test_init (&argc, &argv, NULL);
 
   PHOC_TEST_ADD ("/phoc/client/noop", test_phoc_client_noop);
   PHOC_TEST_ADD ("/phoc/client/surface", test_phoc_client_surface);
 
-  return g_test_run();
+  return g_test_run ();
 }

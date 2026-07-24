@@ -14,7 +14,9 @@
  */
 #include "phoc-config.h"
 #include "keybindings.h"
+#include "workspace-manager.h"
 #include "seat.h"
+#include "server.h"
 #include "keyboard.h"
 
 #include <wlr/types/wlr_keyboard.h>
@@ -26,44 +28,75 @@
 
 typedef void (*PhocKeyHandlerFunc) (PhocSeat *seat, GVariant *param);
 
+G_DEFINE_BOXED_TYPE (PhocKeybindingsContext,
+                     phoc_keybindings_context,
+                     phoc_keybindings_context_copy,
+                     phoc_keybindings_context_free)
 
-typedef struct
-{
-  gchar              *name;
-  PhocKeyHandlerFunc  func;
-  GVariant           *param;
+/**
+ * PhocKeybinding:
+ *
+ * A keybinding represents a handler with params that will be
+ * invoked on the given keybinding combinations.
+ */
+typedef struct {
+  char     *name;
+  PhocKeyHandlerFunc func;
+  GVariant *param;
 
-  GSList             *combos;
+  GSList   *combos;
 } PhocKeybinding;
 
 
-typedef struct _PhocKeybindings
-{
-  GObject parent;
+typedef struct _PhocKeybindings {
+  GObject    parent;
 
-  GSList *bindings;
+  GSList    *bindings;
   GSettings *settings;
   GSettings *mutter_settings;
+
+  PhocKeybindingsContext *context;
 } PhocKeybindings;
 
 G_DEFINE_TYPE (PhocKeybindings, phoc_keybindings, G_TYPE_OBJECT);
 
+
+static void
+handle_always_on_top (PhocSeat *seat, GVariant *param)
+{
+  PhocDesktop *desktop = phoc_server_get_desktop (phoc_server_get_default ());
+  PhocView *view = phoc_seat_get_focus_view (seat);
+  gboolean on_top;
+
+  if (!view)
+    return;
+
+  on_top = !phoc_view_is_always_on_top (view);
+  g_debug ("always-on-top for %s: %d", phoc_view_get_app_id (view), on_top);
+  phoc_desktop_set_view_always_on_top (desktop, view, on_top);
+}
+
+
 static void
 handle_maximize (PhocSeat *seat, GVariant *param)
 {
-  PhocView *focus = phoc_seat_get_focus_view (seat);
+  PhocView *view = phoc_seat_get_focus_view (seat);
 
-  if (focus != NULL)
-    phoc_view_maximize (focus, NULL);
+  if (!view)
+    return;
+
+  phoc_view_maximize (view, NULL);
 }
 
 static void
 handle_unmaximize (PhocSeat *seat, GVariant *param)
 {
-  PhocView *focus = phoc_seat_get_focus_view (seat);
+  PhocView *view = phoc_seat_get_focus_view (seat);
 
-  if (focus != NULL)
-    phoc_view_restore (focus);
+  if (!view)
+    return;
+
+  phoc_view_restore (view);
 }
 
 
@@ -87,48 +120,81 @@ handle_tile (PhocSeat *seat, GVariant *param)
 static void
 handle_toggle_maximized (PhocSeat *seat, GVariant *param)
 {
-  PhocView *focus = phoc_seat_get_focus_view (seat);
+  PhocView *view = phoc_seat_get_focus_view (seat);
 
-  if (focus != NULL) {
-    if (phoc_view_is_maximized (focus))
-      phoc_view_restore (focus);
-    else
-      phoc_view_maximize (focus, NULL);
-  }
+  if (!view)
+    return;
+
+  if (phoc_view_is_maximized (view))
+    phoc_view_restore (view);
+  else
+    phoc_view_maximize (view, NULL);
 }
+
 
 static void
 handle_toggle_fullscreen (PhocSeat *seat, GVariant *param)
 {
-  PhocView *focus = phoc_seat_get_focus_view (seat);
+  PhocView *view = phoc_seat_get_focus_view (seat);
 
-  if (focus) {
-    phoc_view_set_fullscreen(focus, !phoc_view_is_fullscreen (focus), NULL);
-  }
+  if (!view)
+    return;
+
+  phoc_view_set_fullscreen (view, !phoc_view_is_fullscreen (view), NULL);
 }
 
 
 static void
 handle_cycle_windows (PhocSeat *seat, GVariant *param)
 {
-  phoc_seat_cycle_focus(seat, TRUE);
+  phoc_seat_cycle_focus (seat, TRUE);
 }
 
 
 static void
 handle_cycle_windows_backwards (PhocSeat *seat, GVariant *param)
 {
-  phoc_seat_cycle_focus(seat, FALSE);
+  phoc_seat_cycle_focus (seat, FALSE);
+}
+
+
+static void
+handle_cycle_workspace_windows (PhocSeat *seat, GVariant *param)
+{
+  PhocView *view;
+  PhocDesktop *desktop = phoc_server_get_desktop (phoc_server_get_default ());
+  PhocWorkspaceManager *manager = phoc_desktop_get_workspace_manager (desktop);
+  PhocWorkspace *workspace = phoc_workspace_manager_get_active (manager);
+
+  view = phoc_workspace_cycle (workspace, TRUE);
+  if (view)
+    phoc_seat_set_focus_view (seat, view);
+}
+
+
+static void
+handle_cycle_workspace_windows_backwards (PhocSeat *seat, GVariant *param)
+{
+  PhocView *view;
+  PhocDesktop *desktop = phoc_server_get_desktop (phoc_server_get_default ());
+  PhocWorkspaceManager *manager = phoc_desktop_get_workspace_manager (desktop);
+  PhocWorkspace *workspace = phoc_workspace_manager_get_active (manager);
+
+  view = phoc_workspace_cycle (workspace, FALSE);
+  if (view)
+    phoc_seat_set_focus_view (seat, view);
 }
 
 
 static void
 handle_close (PhocSeat *seat, GVariant *param)
 {
-  PhocView *focus = phoc_seat_get_focus_view (seat);
+  PhocView *view = phoc_seat_get_focus_view (seat);
 
-  if (focus)
-    phoc_view_close (focus);
+  if (!view)
+    return;
+
+  phoc_view_close (view);
 }
 
 
@@ -138,9 +204,26 @@ handle_move_to_monitor (PhocSeat *seat, GVariant *param)
   PhocView *view = phoc_seat_get_focus_view (seat);
   enum wlr_direction dir;
 
+  if (!view)
+    return;
+
   dir = g_variant_get_int32 (param);
-  if (view)
-    phoc_view_move_to_next_output (view, dir);
+  phoc_view_move_to_next_output (view, dir);
+}
+
+
+static void
+handle_move_to_corner (PhocSeat *seat, GVariant *param)
+{
+  PhocView *view = phoc_seat_get_focus_view (seat);
+  PhocViewCorner corner;
+
+  corner = g_variant_get_int32 (param);
+
+  if (!view)
+    return;
+
+  phoc_view_move_to_corner (view, corner);
 }
 
 
@@ -160,9 +243,109 @@ handle_switch_input_source (PhocSeat *seat, GVariant *param)
 }
 
 
+static void
+handle_switch_to_workspace (PhocSeat *seat, GVariant *param)
+{
+  PhocDesktop *desktop = phoc_server_get_desktop (phoc_server_get_default ());
+  PhocWorkspaceManager *manager = phoc_desktop_get_workspace_manager (desktop);
+  int index = g_variant_get_int32 (param);
+
+  phoc_workspace_manager_set_active_by_index (manager, index, TRUE);
+}
+
+
+static void
+handle_switch_to_workspace_relative (PhocSeat *seat, GVariant *param)
+{
+  PhocDesktop *desktop = phoc_server_get_desktop (phoc_server_get_default ());
+  PhocWorkspaceManager *manager = phoc_desktop_get_workspace_manager (desktop);
+  int index = phoc_workspace_manager_get_active_index (manager);
+  int offset = g_variant_get_int32 (param);
+
+  phoc_workspace_manager_set_active_by_index (manager, index + offset, TRUE);
+}
+
+
+static void
+move_to_workspace (PhocView *view, int index)
+{
+  PhocDesktop *desktop = phoc_server_get_desktop (phoc_server_get_default ());
+  PhocWorkspaceManager *manager = phoc_desktop_get_workspace_manager (desktop);
+  guint n_workspaces = phoc_workspace_manager_get_n_workspaces (manager);
+  PhocWorkspace *active, *new;
+
+  g_assert (index >= 0);
+  g_assert (index < n_workspaces);
+
+  active = phoc_workspace_manager_get_active (manager);
+  new = phoc_workspace_manager_get_by_index (manager, index);
+  if (active == new)
+    return;
+
+  phoc_view_damage_whole (view);
+  if (!phoc_workspace_remove_view (active, view)) {
+    g_critical ("Current active view '%s' not found on active workspace %d",
+                phoc_view_get_app_id (view),
+                phoc_workspace_manager_get_active_index (manager));
+    return;
+  }
+
+  phoc_workspace_insert_view (new, view);
+  /* Switch to the workspace containing the moved view */
+  phoc_workspace_manager_set_active_by_index (manager, index, FALSE);
+}
+
+
+static void
+handle_move_to_workspace (PhocSeat *seat, GVariant *param)
+{
+  PhocDesktop *desktop = phoc_server_get_desktop (phoc_server_get_default ());
+  PhocWorkspaceManager *manager = phoc_desktop_get_workspace_manager (desktop);
+  PhocView *view = phoc_seat_get_focus_view (seat);
+  int index = g_variant_get_int32 (param);
+  guint n_workspaces = phoc_workspace_manager_get_n_workspaces (manager);
+
+  if (!view)
+    return;
+
+  if (index < 0)
+    return;
+
+  if (index >= n_workspaces)
+    return;
+
+  move_to_workspace (view, index);
+}
+
+
+static void
+handle_move_to_workspace_relative (PhocSeat *seat, GVariant *param)
+{
+  PhocDesktop *desktop = phoc_server_get_desktop (phoc_server_get_default ());
+  PhocWorkspaceManager *manager = phoc_desktop_get_workspace_manager (desktop);
+  PhocView *view = phoc_seat_get_focus_view (seat);
+  int offset = g_variant_get_int32 (param);
+  int index = phoc_workspace_manager_get_active_index (manager);
+  guint n_workspaces = phoc_workspace_manager_get_n_workspaces (manager);
+
+  if (!view)
+    return;
+
+  index += offset;
+
+  if (index < 0)
+    return;
+
+  if (index >= n_workspaces)
+    return;
+
+  move_to_workspace (view, index);
+}
+
+
 /* This is copied from mutter which in turn got it form GTK+ */
 static inline gboolean
-is_alt (const gchar *string)
+is_alt (const char *string)
 {
   return ((string[0] == '<') &&
           (string[1] == 'a' || string[1] == 'A') &&
@@ -172,7 +355,7 @@ is_alt (const gchar *string)
 }
 
 static inline gboolean
-is_ctl (const gchar *string)
+is_ctl (const char *string)
 {
   return ((string[0] == '<') &&
           (string[1] == 'c' || string[1] == 'C') &&
@@ -182,7 +365,7 @@ is_ctl (const gchar *string)
 }
 
 static inline gboolean
-is_modx (const gchar *string)
+is_modx (const char *string)
 {
   return ((string[0] == '<') &&
           (string[1] == 'm' || string[1] == 'M') &&
@@ -193,7 +376,7 @@ is_modx (const gchar *string)
 }
 
 static inline gboolean
-is_ctrl (const gchar *string)
+is_ctrl (const char *string)
 {
   return ((string[0] == '<') &&
           (string[1] == 'c' || string[1] == 'C') &&
@@ -204,7 +387,7 @@ is_ctrl (const gchar *string)
 }
 
 static inline gboolean
-is_shft (const gchar *string)
+is_shft (const char *string)
 {
   return ((string[0] == '<') &&
           (string[1] == 's' || string[1] == 'S') &&
@@ -215,7 +398,7 @@ is_shft (const gchar *string)
 }
 
 static inline gboolean
-is_shift (const gchar *string)
+is_shift (const char *string)
 {
   return ((string[0] == '<') &&
           (string[1] == 's' || string[1] == 'S') &&
@@ -227,7 +410,7 @@ is_shift (const gchar *string)
 }
 
 static inline gboolean
-is_control (const gchar *string)
+is_control (const char *string)
 {
   return ((string[0] == '<') &&
           (string[1] == 'c' || string[1] == 'C') &&
@@ -241,7 +424,7 @@ is_control (const gchar *string)
 }
 
 static inline gboolean
-is_meta (const gchar *string)
+is_meta (const char *string)
 {
   return ((string[0] == '<') &&
           (string[1] == 'm' || string[1] == 'M') &&
@@ -252,7 +435,7 @@ is_meta (const gchar *string)
 }
 
 static inline gboolean
-is_super (const gchar *string)
+is_super (const char *string)
 {
   return ((string[0] == '<') &&
           (string[1] == 's' || string[1] == 'S') &&
@@ -264,7 +447,7 @@ is_super (const gchar *string)
 }
 
 static inline gboolean
-is_hyper (const gchar *string)
+is_hyper (const char *string)
 {
   return ((string[0] == '<') &&
           (string[1] == 'h' || string[1] == 'H') &&
@@ -276,7 +459,7 @@ is_hyper (const gchar *string)
 }
 
 static inline gboolean
-is_keycode (const gchar *string)
+is_keycode (const char *string)
 {
   return (string[0] == '0' &&
           string[1] == 'x' &&
@@ -284,8 +467,14 @@ is_keycode (const gchar *string)
           g_ascii_isxdigit (string[3]));
 }
 
+/**
+ * phoc_keybindings_parse_accelerator: (skip)
+ *
+ * Parse strings representing keybindings into modifier
+ * and symbols.
+ */
 PhocKeyCombo *
-phoc_parse_accelerator (const gchar *accelerator)
+phoc_keybindings_parse_accelerator (const char *accelerator, PhocKeybindingsContext *context)
 {
   PhocKeyCombo *combo;
   xkb_keysym_t keyval;
@@ -348,7 +537,7 @@ phoc_parse_accelerator (const gchar *accelerator)
         len -= 7;
         mods |= WLR_MODIFIER_LOGO;
       } else {
-        gchar last_ch;
+        char last_ch;
 
         last_ch = *accelerator;
         while (last_ch && last_ch != '>') {
@@ -359,16 +548,20 @@ phoc_parse_accelerator (const gchar *accelerator)
       }
     } else {
       if (len >= 4 && is_keycode (accelerator)) {
-        //keycode = strtoul (accelerator, NULL, 16);
+        // keycode = strtoul (accelerator, NULL, 16);
         g_warning ("Unhandled keycode accelerator'");
         goto out;
       } else if (strcmp (accelerator, "Above_Tab") == 0) {
-        g_warning ("Unhandled key 'Above_Tab'");
-        return FALSE;
+        if (context && context->above_tab_keysym != XKB_KEY_NoSymbol) {
+          keyval = context->above_tab_keysym;
+        } else {
+          g_warning ("Unhandled key 'Above_Tab'");
+          return FALSE;
+        }
       } else {
         keyval = xkb_keysym_from_name (accelerator, XKB_KEYSYM_CASE_INSENSITIVE);
         if (keyval == XKB_KEY_NoSymbol) {
-          g_autofree gchar *with_xf86 = g_strconcat ("XF86", accelerator, NULL);
+          g_autofree char *with_xf86 = g_strconcat ("XF86", accelerator, NULL);
           keyval = xkb_keysym_from_name (with_xf86, XKB_KEYSYM_CASE_INSENSITIVE);
 
           if (keyval == XKB_KEY_NoSymbol)
@@ -389,6 +582,20 @@ phoc_parse_accelerator (const gchar *accelerator)
 }
 
 
+static PhocKeybinding *
+phoc_keybinding_new (const char *name, PhocKeyHandlerFunc func, GVariant *param)
+{
+  PhocKeybinding *binding = g_new0 (PhocKeybinding, 1);
+
+  binding->name = g_strdup (name);
+  binding->func = func;
+  if (param)
+    binding->param = g_variant_ref_sink (param);
+
+  return binding;
+}
+
+
 static void
 phoc_keybinding_free (PhocKeybinding *keybinding)
 {
@@ -403,13 +610,12 @@ phoc_keybinding_free (PhocKeybinding *keybinding)
 static gboolean
 key_combo_eq (const PhocKeyCombo *sym1, const PhocKeyCombo *sym2)
 {
-  return (sym1->modifiers == sym2->modifiers &&
-          sym1->keysym == sym2->keysym);
+  return (sym1->modifiers == sym2->modifiers && sym1->keysym == sym2->keysym);
 }
 
 
 static gboolean
-keybinding_by_name (const PhocKeybinding *keybinding, const gchar *name)
+keybinding_by_name (const PhocKeybinding *keybinding, const char *name)
 {
   return g_strcmp0 (keybinding->name, name);
 }
@@ -418,37 +624,28 @@ keybinding_by_name (const PhocKeybinding *keybinding, const gchar *name)
 static gboolean
 keybinding_by_key_combo (const PhocKeybinding *keybinding, const PhocKeyCombo *combo)
 {
-  GSList *elem = keybinding->combos;
-
-  while (elem) {
+  for (GSList *elem = keybinding->combos; elem; elem = elem->next) {
     if (key_combo_eq (elem->data, combo))
       return FALSE;
-    elem = elem->next;
-  };
+  }
+
   return TRUE;
 }
 
 
 static void
-on_keybinding_setting_changed (PhocKeybindings *self,
-                               const gchar     *key,
-                               GSettings       *settings)
+phoc_keybindings_update_accelerators (PhocKeybindings    *self,
+                                      const char         *name,
+                                      const char * const *accelerators)
 {
-  g_auto(GStrv) accelerators = NULL;
   PhocKeybinding *keybinding;
   GSList *elem;
-  int i;
-
-  g_return_if_fail (PHOC_IS_KEYBINDINGS (self));
-  g_return_if_fail (G_IS_SETTINGS (settings));
-
-  accelerators = g_settings_get_strv (settings, key);
 
   elem = g_slist_find_custom (self->bindings,
-                              key,
+                              name,
                               (GCompareFunc)keybinding_by_name);
   if (!elem) {
-    g_warning ("Changed keybinding %s not known", key);
+    g_warning ("Changed keybinding %s not known", name);
     return;
   }
 
@@ -457,25 +654,40 @@ on_keybinding_setting_changed (PhocKeybindings *self,
   g_slist_free_full (keybinding->combos, g_free);
   keybinding->combos = NULL;
 
-  for (i = 0; accelerators && accelerators[i]; i++) {
+  for (int i = 0; accelerators && accelerators[i]; i++) {
     PhocKeyCombo *combo;
 
-    g_debug ("New keybinding %s for %s", key, accelerators[i]);
-    combo = phoc_parse_accelerator (accelerators[i]);
+    g_debug ("New keybinding %s for %s", name, accelerators[i]);
+    combo = phoc_keybindings_parse_accelerator (accelerators[i], self->context);
     if (combo)
       keybinding->combos = g_slist_append (keybinding->combos, combo);
   }
 }
 
 
-static gboolean
-phoc_add_keybinding (PhocKeybindings    *self,
-                     GSettings          *settings,
-                     const gchar        *name,
-                     PhocKeyHandlerFunc  func,
-                     GVariant           *param)
+static void
+on_keybinding_setting_changed (PhocKeybindings *self,
+                               const char      *name,
+                               GSettings       *settings)
 {
-  g_autofree gchar *signal_name = NULL;
+  g_auto (GStrv) accelerators = NULL;
+
+  g_return_if_fail (PHOC_IS_KEYBINDINGS (self));
+  g_return_if_fail (G_IS_SETTINGS (settings));
+
+  accelerators = g_settings_get_strv (settings, name);
+  phoc_keybindings_update_accelerators (self, name, (const char * const *) accelerators);
+}
+
+
+static gboolean
+phoc_add_keybinding (PhocKeybindings   *self,
+                     GSettings         *settings,
+                     const char        *name,
+                     PhocKeyHandlerFunc func,
+                     GVariant          *param)
+{
+  g_autofree char *signal_name = NULL;
   PhocKeybinding *binding;
 
   if (g_slist_find_custom (self->bindings, name, (GCompareFunc)keybinding_by_name)) {
@@ -483,11 +695,7 @@ phoc_add_keybinding (PhocKeybindings    *self,
     return FALSE;
   }
 
-  binding = g_new0 (PhocKeybinding, 1);
-  binding->name = g_strdup (name);
-  binding->func = func;
-  if (param)
-    binding->param = g_variant_ref_sink (param);
+  binding = phoc_keybinding_new (name, func, param);
 
   signal_name = g_strdup_printf ("changed::%s", name);
   g_signal_connect_swapped (settings, signal_name,
@@ -517,6 +725,7 @@ phoc_keybindings_finalize (GObject *object)
 {
   PhocKeybindings *self = PHOC_KEYBINDINGS (object);
 
+  g_clear_pointer (&self->context, phoc_keybindings_context_free);
   g_clear_object (&self->settings);
   g_clear_object (&self->mutter_settings);
 
@@ -524,14 +733,13 @@ phoc_keybindings_finalize (GObject *object)
 }
 
 
-static void
-phoc_keybindings_constructed (GObject *object)
+void
+phoc_keybindings_load_settings (PhocKeybindings *self)
 {
-  PhocKeybindings *self = PHOC_KEYBINDINGS (object);
+  g_slist_free_full (self->bindings, (GDestroyNotify)phoc_keybinding_free);
+  self->bindings = NULL;
 
-  G_OBJECT_CLASS (phoc_keybindings_parent_class)->constructed (object);
-
-  self->settings = g_settings_new (KEYBINDINGS_SCHEMA_ID);
+  phoc_add_keybinding (self, self->settings, "always-on-top", handle_always_on_top, NULL);
   phoc_add_keybinding (self, self->settings, "close", handle_close, NULL);
   phoc_add_keybinding (self, self->settings, "cycle-windows", handle_cycle_windows, NULL);
   phoc_add_keybinding (self, self->settings,
@@ -552,18 +760,77 @@ phoc_keybindings_constructed (GObject *object)
   phoc_add_keybinding (self, self->settings,
                        "move-to-monitor-left", handle_move_to_monitor,
                        g_variant_new_int32 (WLR_DIRECTION_LEFT));
+  phoc_add_keybinding (self, self->settings,
+                       "move-to-corner-nw", handle_move_to_corner,
+                       g_variant_new_int32 (PHOC_VIEW_CORNER_NORTH_WEST));
+  phoc_add_keybinding (self, self->settings,
+                       "move-to-corner-ne", handle_move_to_corner,
+                       g_variant_new_int32 (PHOC_VIEW_CORNER_NORTH_EAST));
+  phoc_add_keybinding (self, self->settings,
+                       "move-to-corner-se", handle_move_to_corner,
+                       g_variant_new_int32 (PHOC_VIEW_CORNER_SOUTH_EAST));
+  phoc_add_keybinding (self, self->settings,
+                       "move-to-corner-sw", handle_move_to_corner,
+                       g_variant_new_int32 (PHOC_VIEW_CORNER_SOUTH_WEST));
   /* TODO: we need a real switch-applications but ALT-TAB should do s.th.
    * useful */
   phoc_add_keybinding (self, self->settings, "switch-applications", handle_cycle_windows, NULL);
   phoc_add_keybinding (self, self->settings,
                        "switch-applications-backward", handle_cycle_windows_backwards,
                        NULL);
+  phoc_add_keybinding (self, self->settings,
+                       "switch-windows", handle_cycle_workspace_windows,
+                       NULL);
+  phoc_add_keybinding (self, self->settings,
+                       "switch-windows-backward", handle_cycle_workspace_windows_backwards,
+                       NULL);
   phoc_add_keybinding (self, self->settings,"unmaximize", handle_unmaximize, NULL);
   phoc_add_keybinding (self, self->settings,
                        "switch-input-source", handle_switch_input_source,
                        NULL);
+  phoc_add_keybinding (self, self->settings,
+                       "switch-to-workspace-1", handle_switch_to_workspace,
+                       g_variant_new_int32 (0));
+  phoc_add_keybinding (self, self->settings,
+                       "switch-to-workspace-2", handle_switch_to_workspace,
+                       g_variant_new_int32 (1));
+  phoc_add_keybinding (self, self->settings,
+                       "switch-to-workspace-3", handle_switch_to_workspace,
+                       g_variant_new_int32 (2));
+  phoc_add_keybinding (self, self->settings,
+                       "switch-to-workspace-4", handle_switch_to_workspace,
+                       g_variant_new_int32 (3));
+  phoc_add_keybinding (self, self->settings,
+                       "switch-to-workspace-5", handle_switch_to_workspace,
+                       g_variant_new_int32 (4));
+  phoc_add_keybinding (self, self->settings,
+                       "switch-to-workspace-6", handle_switch_to_workspace,
+                       g_variant_new_int32 (5));
+  phoc_add_keybinding (self, self->settings,
+                       "switch-to-workspace-left", handle_switch_to_workspace_relative,
+                       g_variant_new_int32 (-1));
+  phoc_add_keybinding (self, self->settings,
+                       "switch-to-workspace-right", handle_switch_to_workspace_relative,
+                       g_variant_new_int32 (+1));
+  phoc_add_keybinding (self, self->settings,
+                       "move-to-workspace-1", handle_move_to_workspace,
+                       g_variant_new_int32 (0));
+  phoc_add_keybinding (self, self->settings,
+                       "move-to-workspace-2", handle_move_to_workspace,
+                       g_variant_new_int32 (1));
+  phoc_add_keybinding (self, self->settings,
+                       "move-to-workspace-3", handle_move_to_workspace,
+                       g_variant_new_int32 (2));
+  phoc_add_keybinding (self, self->settings,
+                       "move-to-workspace-4", handle_move_to_workspace,
+                       g_variant_new_int32 (3));
+  phoc_add_keybinding (self, self->settings,
+                       "move-to-workspace-left", handle_move_to_workspace_relative,
+                       g_variant_new_int32 (-1));
+  phoc_add_keybinding (self, self->settings,
+                       "move-to-workspace-right", handle_move_to_workspace_relative,
+                       g_variant_new_int32 (+1));
 
-  self->mutter_settings = g_settings_new (MUTTER_KEYBINDINGS_SCHEMA_ID);
   phoc_add_keybinding (self, self->mutter_settings,
                        "toggle-tiled-left", handle_tile,
                        g_variant_new_int32 (PHOC_VIEW_TILE_LEFT));
@@ -578,7 +845,6 @@ phoc_keybindings_class_init (PhocKeybindingsClass *klass)
 {
   GObjectClass *object_class = G_OBJECT_CLASS (klass);
 
-  object_class->constructed = phoc_keybindings_constructed;
   object_class->dispose = phoc_keybindings_dispose;
   object_class->finalize = phoc_keybindings_finalize;
 }
@@ -588,6 +854,8 @@ static void
 phoc_keybindings_init (PhocKeybindings *self)
 {
   self->bindings = NULL;
+  self->settings = g_settings_new (KEYBINDINGS_SCHEMA_ID);
+  self->mutter_settings = g_settings_new (MUTTER_KEYBINDINGS_SCHEMA_ID);
 }
 
 
@@ -599,6 +867,11 @@ phoc_keybindings_new (void)
 
 /**
  * phoc_keybindings_handle_pressed:
+ * @self: The keybindings
+ * @modifiers: The currently pressed modifiers
+ * @pressed_keysyms: The currently pressed keysyms
+ * @length: The number of pressed keysyms
+ * @seat: The seat this is happening on
  *
  * Check if a keybinding is known and run the associated action
  *
@@ -606,10 +879,10 @@ phoc_keybindings_new (void)
  */
 gboolean
 phoc_keybindings_handle_pressed (PhocKeybindings *self,
-                                 guint32 modifiers,
-                                 xkb_keysym_t *pressed_keysyms,
-                                 guint32 length,
-                                 PhocSeat *seat)
+                                 guint32          modifiers,
+                                 xkb_keysym_t    *pressed_keysyms,
+                                 guint32          length,
+                                 PhocSeat        *seat)
 {
   PhocKeybinding *keybinding;
   GSList *elem;
@@ -632,4 +905,45 @@ phoc_keybindings_handle_pressed (PhocKeybindings *self,
 
   (*keybinding->func) (seat, keybinding->param);
   return TRUE;
+}
+
+
+void
+phoc_keybindings_set_context (PhocKeybindings *self, PhocKeybindingsContext *context)
+{
+  g_assert (PHOC_IS_KEYBINDINGS (self));
+
+  g_clear_pointer (&self->context, phoc_keybindings_context_free);
+
+  if (context == NULL)
+    return;
+
+  self->context = phoc_keybindings_context_copy (context);
+}
+
+
+PhocKeybindingsContext *
+phoc_keybindings_context_new (void)
+{
+  return g_new0 (PhocKeybindingsContext, 1);
+}
+
+
+void
+phoc_keybindings_context_free (PhocKeybindingsContext *context)
+{
+  g_free (context);
+}
+
+
+PhocKeybindingsContext *
+phoc_keybindings_context_copy (PhocKeybindingsContext *context)
+{
+  g_autoptr (PhocKeybindingsContext) copy = phoc_keybindings_context_new ();
+
+  g_assert (context);
+
+  copy->above_tab_keysym = context->above_tab_keysym;
+
+  return g_steal_pointer (&copy);
 }

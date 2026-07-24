@@ -6,8 +6,26 @@
 #include <strings.h>
 #include <sys/param.h>
 
+#include "phoc-enums.h"
 #include "settings.h"
 #include "utils.h"
+
+
+static bool
+parse_boolean (const char *s, bool default_)
+{
+  g_return_val_if_fail (s, default_);
+
+  if (strcasecmp (s, "true") == 0)
+    return true;
+
+  if (strcasecmp (s, "false") == 0)
+    return false;
+
+  g_critical ("got invalid output enable value: %s", s);
+  return default_;
+}
+
 
 static bool
 parse_modeline (const char *s, drmModeModeInfo *mode)
@@ -57,9 +75,51 @@ parse_modeline (const char *s, drmModeModeInfo *mode)
 }
 
 
+static PhocOutputScaleFilter
+parse_scale_filter (const char *value)
+{
+  GEnumValue *ev;
+  g_autoptr (GEnumClass) eclass = NULL;
+
+  eclass = G_ENUM_CLASS (g_type_class_ref (phoc_output_scale_filter_get_type ()));
+  ev = g_enum_get_value_by_nick (eclass, value);
+  if (!ev) {
+    g_critical ("Got invalid output scale-filter value: %s", value);
+    return PHOC_OUTPUT_SCALE_FILTER_AUTO;
+  }
+
+  return ev->value;
+}
+
+
+static PhocOutputAdaptiveSync
+parse_adapative_sync (const char *value)
+{
+  GEnumValue *ev;
+  g_autoptr (GEnumClass) eclass = NULL;
+
+  eclass = G_ENUM_CLASS (g_type_class_ref (phoc_output_adaptive_sync_get_type ()));
+  ev = g_enum_get_value_by_nick (eclass, value);
+  if (!ev) {
+    g_critical ("Got invalid output adaptive-sync value: %s", value);
+    return PHOC_OUTPUT_ADAPTIVE_SYNC_NONE;
+  }
+
+  return ev->value;
+}
+
+
 static const char *output_prefix = "output:";
 
-static PhocOutputConfig *
+/**
+ * phoc_output_config_new:
+ * @name: The name
+ *
+ * Create a new output config
+ *
+ * Returns: (transfer full): The new (empty) configuration
+ */
+PhocOutputConfig *
 phoc_output_config_new (const char *name)
 {
   PhocOutputConfig *oc;
@@ -71,12 +131,14 @@ phoc_output_config_new (const char *name)
   oc->enable = true;
   oc->x = -1;
   oc->y = -1;
+  oc->scale_filter = PHOC_OUTPUT_SCALE_FILTER_AUTO;
+  oc->drm_panel_orientation = false;
 
   return oc;
 }
 
 
-static void
+void
 phoc_output_config_destroy (PhocOutputConfig *oc)
 {
   g_slist_free_full (oc->modes, g_free);
@@ -122,13 +184,7 @@ config_ini_handler (PhocConfig *config, const char *section, const char *name, c
     }
 
     if (strcmp (name, "enable") == 0) {
-      if (strcasecmp (value, "true") == 0) {
-        oc->enable = true;
-      } else if (strcasecmp (value, "false") == 0) {
-        oc->enable = false;
-      } else {
-        g_critical ("got invalid output enable value: %s", value);
-      }
+      oc->enable = parse_boolean (value, oc->enable);
     } else if (strcmp (name, "x") == 0) {
       oc->x = strtol (value, NULL, 10);
     } else if (strcmp (name, "y") == 0) {
@@ -174,9 +230,9 @@ config_ini_handler (PhocConfig *config, const char *section, const char *name, c
         oc->mode.refresh_rate = strtof (end, &end);
         g_assert (strcmp ("Hz", end) == 0);
       }
-      g_debug ("Configured output %s with mode %dx%d@%f",
-               oc->name, oc->mode.width, oc->mode.height,
-               oc->mode.refresh_rate);
+      g_debug ("Parsed mode %dx%d@%f for output %s",
+               oc->mode.width, oc->mode.height,
+               oc->mode.refresh_rate, oc->name);
     } else if (strcmp (name, "modeline") == 0) {
       g_autofree PhocOutputModeConfig *mode = g_new0 (PhocOutputModeConfig, 1);
 
@@ -184,6 +240,18 @@ config_ini_handler (PhocConfig *config, const char *section, const char *name, c
         oc->modes = g_slist_prepend (oc->modes, g_steal_pointer (&mode));
       else
         g_critical ("Invalid modeline: %s", value);
+    } else if (strcmp (name, "scale-filter") == 0) {
+      oc->scale_filter = parse_scale_filter (value);
+    } else if (strcmp (name, "drm-panel-orientation") == 0) {
+      oc->drm_panel_orientation = parse_boolean (value, true);
+    } else if (g_str_equal (name, "phys_width")) {
+      oc->phys_width = strtol (value, NULL, 10);
+    } else if (g_str_equal (name, "phys_height")) {
+      oc->phys_height = strtol (value, NULL, 10);
+    } else if (g_str_equal (name, "adaptive-sync")) {
+      oc->adaptive_sync = parse_adapative_sync (value);
+    } else {
+      g_warning ("Unknown key '%s' in section '%s'", name, section);
     }
   } else {
     g_critical ("Found unknown config section: %s", section);
@@ -201,7 +269,6 @@ phoc_config_new_from_keyfile (GKeyFile *keyfile)
 
   config->xwayland = true;
   config->xwayland_lazy = true;
-  config->keybindings = phoc_keybindings_new ();
 
   sections = g_key_file_get_groups (keyfile, NULL);
   for (int i = 0; i < g_strv_length (sections); i++) {
@@ -234,7 +301,7 @@ phoc_config_new_from_keyfile (GKeyFile *keyfile)
 }
 
 /**
- * phoc_config_new_from_file:
+ * phoc_config_new_from_file: (skip)
  * @config_path: (nullable): The config file location
  *
  * Parse the file at the given location into a configuration.
@@ -279,7 +346,7 @@ phoc_config_new_from_file (const char *config_path)
 
 
 /**
- * phoc_config_new_from_data:
+ * phoc_config_new_from_data: (skip)
  * @data: (nullable): The config data
  *
  * Parse the given config data
@@ -313,8 +380,8 @@ void
 phoc_config_destroy (PhocConfig *config)
 {
   g_slist_free_full (config->outputs, (GDestroyNotify)phoc_output_config_destroy);
-  g_object_unref (config->keybindings);
 
+  g_free (config->socket);
   g_free (config->config_path);
   g_free (config);
 }
@@ -346,7 +413,7 @@ output_is_match (PhocOutputConfig *oc, PhocOutput *output)
 }
 
 /**
- * phoc_config_get_output:
+ * phoc_config_get_output: (skip)
  * config: The #PhocConfig
  * output: The output to get the configuration for
  *

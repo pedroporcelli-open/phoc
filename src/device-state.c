@@ -17,7 +17,7 @@
 
 #include <glib-object.h>
 
-#define DEVICE_STATE_PROTOCOL_VERSION 1
+#define DEVICE_STATE_PROTOCOL_VERSION 2
 
 enum {
   PROP_0,
@@ -141,6 +141,7 @@ handle_get_tablet_mode_switch (struct wl_client   *client,
                                                      version,
                                                      id);
   if (tablet_mode_switch->resource == NULL) {
+    g_free (tablet_mode_switch);
     wl_client_post_no_memory (client);
     return;
   }
@@ -235,6 +236,7 @@ handle_get_lid_switch (struct wl_client   *client,
                                              version,
                                              id);
   if (lid_switch->resource == NULL) {
+    g_free (lid_switch);
     wl_client_post_no_memory (client);
     return;
   }
@@ -384,9 +386,9 @@ phoc_device_state_class_init (PhocDeviceStateClass *klass)
 static void
 phoc_device_state_init (PhocDeviceState *self)
 {
-  struct wl_display *display = phoc_server_get_default ()->wl_display;
+  struct wl_display *wl_display = phoc_server_get_wl_display (phoc_server_get_default ());
 
-  self->global = wl_global_create (display, &zphoc_device_state_v1_interface,
+  self->global = wl_global_create (wl_display, &zphoc_device_state_v1_interface,
                                    DEVICE_STATE_PROTOCOL_VERSION, self, device_state_bind);
 
 }
@@ -395,9 +397,9 @@ phoc_device_state_init (PhocDeviceState *self)
 PhocDeviceState *
 phoc_device_state_new (PhocSeat *seat)
 {
-  return PHOC_DEVICE_STATE (g_object_new (PHOC_TYPE_DEVICE_STATE,
-                                          "seat", seat,
-                                          NULL));
+  return g_object_new (PHOC_TYPE_DEVICE_STATE,
+                       "seat", seat,
+                       NULL);
 }
 
 
@@ -414,6 +416,9 @@ phoc_device_state_update_capabilities (PhocDeviceState *self)
   if (phoc_seat_has_switch (self->seat, WLR_SWITCH_TYPE_LID))
     caps |= ZPHOC_DEVICE_STATE_V1_CAPABILITY_LID_SWITCH;
 
+  if (phoc_seat_has_hw_keyboard (self->seat))
+    caps |= ZPHOC_DEVICE_STATE_V1_CAPABILITY_KEYBOARD;
+
   if (caps == self->caps)
     return;
 
@@ -422,8 +427,14 @@ phoc_device_state_update_capabilities (PhocDeviceState *self)
   /* Send out updated capabilities */
   for (GSList *l = self->resources; l; l = l->next) {
     struct wl_resource *resource = l->data;
+    uint32_t versioned_caps = caps;
+    int version;
 
-    zphoc_device_state_v1_send_capabilities (resource, caps);
+    version = wl_resource_get_version (resource);
+    if (version < ZPHOC_DEVICE_STATE_V1_CAPABILITY_KEYBOARD_SINCE_VERSION)
+      versioned_caps &= ~ZPHOC_DEVICE_STATE_V1_CAPABILITY_KEYBOARD;
+
+    zphoc_device_state_v1_send_capabilities (resource, versioned_caps);
   }
 }
 

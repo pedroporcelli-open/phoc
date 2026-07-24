@@ -1,5 +1,8 @@
 /*
  * Copyright (C) 2019 Purism SPC
+ *               2023-2024 The Phosh Developers
+ *               2025-2026 Phosh.mobi e.V.
+ *
  * SPDX-License-Identifier: GPL-3.0-or-later
  * Author: Guido Günther <agx@sigxcpu.org>
  */
@@ -7,39 +10,109 @@
 #define G_LOG_DOMAIN "phoc-server"
 
 #include "phoc-config.h"
-#include "render.h"
+#include "phoc-enums.h"
+#include "debug-control.h"
 #include "render-private.h"
-#include "utils.h"
 #include "seat.h"
-#include "server.h"
+#include "server-private.h"
+#include "surface.h"
+#include "utils.h"
+#include "xdg-dialog.h"
+#include "xdg-toplevel.h"
+#include "xdg-toplevel-decoration.h"
 
-#define GMOBILE_USE_UNSTABLE_API
 #include <gmobile.h>
 
+#include <glib-unix.h>
+
 #include <wlr/types/wlr_drm.h>
+#include <wlr/types/wlr_ext_data_control_v1.h>
+#include <wlr/types/wlr_ext_image_capture_source_v1.h>
+#include <wlr/types/wlr_ext_image_copy_capture_v1.h>
 #include <wlr/types/wlr_linux_dmabuf_v1.h>
 #include <wlr/types/wlr_security_context_v1.h>
+#include <wlr/types/wlr_xdg_toplevel_tag_v1.h>
 #include <wlr/xwayland.h>
 #include <wlr/xwayland/shell.h>
 
 #include <errno.h>
+#include <sys/resource.h>
 
 /* Maximum protocol versions we support */
 #define PHOC_WL_DISPLAY_VERSION 6
-#define PHOC_LINUX_DMABUF_VERSION 4
+#define PHOC_LINUX_DMABUF_VERSION 5
+#define PHOC_XDG_DIALOG_VERSION 1
+#define PHOC_XDG_SHELL_VERSION 6
 
+enum {
+  PROP_0,
+  PROP_DEBUG_FLAGS,
+  PROP_LOG_DOMAINS,
+  PROP_LAST_PROP
+};
+static GParamSpec *props[PROP_LAST_PROP];
 
-typedef struct _PhocServerPrivate {
-  GStrv dt_compatibles;
-  struct wlr_session *session;
+/**
+ * PhocServer:
+ *
+ * The server singleton.
+ *
+ * Maintains the compositor's state.
+ */
+typedef struct _PhocServer {
+  GObject              parent;
 
-  struct wlr_linux_dmabuf_v1 *linux_dmabuf_v1;
-} PhocServerPrivate;
+  gboolean             inited;
+  gboolean             show_spinner;
+  gboolean             allow_input;
+
+  PhocInput           *input;
+  PhocConfig          *config;
+  PhocServerFlags      flags;
+  GStrv                log_domains;
+  PhocServerDebugFlags debug_flags;
+  PhocDebugControl    *debug_control;
+
+  PhocRenderer        *renderer;
+  PhocDesktop         *desktop;
+
+  char                *session_exec;
+  GPid                 session_pid;
+  gint                 exit_status;
+  GMainLoop           *mainloop;
+
+  GStrv                dt_compatibles;
+
+  struct rlimit        saved_nofile_rlimit;
+
+  struct wl_display   *wl_display;
+  guint                wl_source;
+
+  struct wlr_compositor    *compositor;
+  struct wlr_subcompositor *subcompositor;
+  struct wlr_backend       *backend;
+  struct wlr_session       *session;
+
+  struct wlr_linux_dmabuf_v1     *linux_dmabuf_v1;
+  struct wlr_data_device_manager *data_device_manager;
+  struct wlr_ext_data_control_manager_v1 *ext_data_control_manager_v1;
+  struct wlr_ext_image_copy_capture_manager_v1 *ext_image_copy_capture_manager_v1;
+  struct wlr_xdg_decoration_manager_v1 *xdg_decoration_manager;
+  struct wlr_xdg_shell *xdg_shell;
+  struct wlr_xdg_wm_dialog_v1 *xdg_wm_dialog;
+
+  struct wl_listener   new_surface;
+  struct wl_listener   xdg_new_dialog;
+  struct wl_listener   xdg_shell_toplevel;
+  struct wl_listener   xdg_toplevel_decoration;
+  struct wl_listener   xdg_toplevel_tag_manager_v1_set_tag;
+
+  GSettings           *settings;
+} PhocServer;
 
 static void phoc_server_initable_iface_init (GInitableIface *iface);
 
 G_DEFINE_TYPE_WITH_CODE (PhocServer, phoc_server, G_TYPE_OBJECT,
-                         G_ADD_PRIVATE (PhocServer)
                          G_IMPLEMENT_INTERFACE (G_TYPE_INITABLE, phoc_server_initable_iface_init));
 
 typedef struct {
@@ -49,13 +122,36 @@ typedef struct {
 
 
 static gboolean
+on_shutdown_signal (gpointer user_data)
+{
+  static gboolean signal_sent;
+  PhocServer *self = PHOC_SERVER (user_data);
+
+  g_return_val_if_fail (self->session_pid > 0, FALSE);
+
+  if (!signal_sent) {
+    g_debug ("Ending session via SIGTERM");
+    kill (self->session_pid, SIGTERM);
+    signal_sent = TRUE;
+    return TRUE;
+  }
+
+  g_warning ("Received 2nd SIGTERM, quitting.");
+  g_main_loop_quit (self->mainloop);
+  return FALSE;
+}
+
+
+static gboolean
 wayland_event_source_prepare (GSource *base,
                               int     *timeout)
 {
   WaylandEventSource *source = (WaylandEventSource *)base;
+  struct wl_event_loop *loop = wl_display_get_event_loop (source->display);
 
   *timeout = -1;
 
+  wl_event_loop_dispatch_idle (loop);
   wl_display_flush_clients (source->display);
 
   return FALSE;
@@ -109,7 +205,7 @@ phoc_wayland_init (PhocServer *self)
 static void
 on_session_exit (GPid pid, gint status, PhocServer *self)
 {
-  g_autoptr(GError) err = NULL;
+  g_autoptr (GError) err = NULL;
 
   g_return_if_fail (PHOC_IS_SERVER (self));
   g_spawn_close_pid (pid);
@@ -127,27 +223,39 @@ on_session_exit (GPid pid, gint status, PhocServer *self)
 
 
 static void
-on_child_setup (gpointer unused)
+on_child_setup (gpointer data)
 {
+  PhocServer *self = PHOC_SERVER (data);
   sigset_t mask;
+
+  g_assert (PHOC_IS_SERVER (data));
 
   /* phoc wants SIGUSR1 blocked due to wlroots/xwayland but we
      don't want to inherit that to children */
-  sigemptyset(&mask);
-  sigaddset(&mask, SIGUSR1);
-  sigprocmask(SIG_UNBLOCK, &mask, NULL);
+  sigemptyset (&mask);
+  sigaddset (&mask, SIGUSR1);
+  sigprocmask (SIG_UNBLOCK, &mask, NULL);
+
+  /* Restore nofile rlimit */
+  if (self->saved_nofile_rlimit.rlim_cur) {
+    if (setrlimit (RLIMIT_NOFILE, &self->saved_nofile_rlimit)) {
+      g_critical ("Failed to restore nofile rlimit: %s", g_strerror (errno));
+      return;
+    }
+  }
 }
 
 
-static gboolean
-phoc_startup_session_in_idle (PhocServer *self)
+static void
+phoc_startup_session_in_idle (gpointer data)
 {
+  PhocServer *self = PHOC_SERVER (data);
   GPid pid;
   g_auto (GStrv) argv;
   g_autoptr (GError) err = NULL;
   gboolean success;
 
-  success = g_shell_parse_argv (self->session, NULL, &argv, &err);
+  success = g_shell_parse_argv (self->session_exec, NULL, &argv, &err);
   if (!success) {
     g_critical ("Failed to parse session command: %s", err->message);
     g_main_loop_quit (self->mainloop);
@@ -157,11 +265,12 @@ phoc_startup_session_in_idle (PhocServer *self)
                      G_SPAWN_DO_NOT_REAP_CHILD | G_SPAWN_SEARCH_PATH,
                      on_child_setup, self, &pid, &err)) {
     g_child_watch_add (pid, (GChildWatchFunc)on_session_exit, self);
+    self->session_pid = pid;
+    g_unix_signal_add (SIGTERM, on_shutdown_signal, self);
   } else {
     g_critical ("Failed to launch session: %s", err->message);
     g_main_loop_quit (self->mainloop);
   }
-  return FALSE;
 }
 
 
@@ -170,8 +279,32 @@ phoc_startup_session (PhocServer *server)
 {
   gint id;
 
-  id = g_idle_add ((GSourceFunc) phoc_startup_session_in_idle, server);
+  id = g_idle_add_once (phoc_startup_session_in_idle, server);
   g_source_set_name_by_id (id, "[phoc] phoc_startup_session");
+}
+
+
+static void
+phoc_server_raise_nofile_rlimit (PhocServer *self)
+{
+  struct rlimit new_rlimit;
+
+  if (getrlimit (RLIMIT_NOFILE, &self->saved_nofile_rlimit)) {
+    g_critical ("Failed to get nofile rlimit: %s", g_strerror (errno));
+    return;
+  }
+
+  new_rlimit = self->saved_nofile_rlimit;
+  new_rlimit.rlim_cur = new_rlimit.rlim_max;
+
+  if (setrlimit (RLIMIT_NOFILE, &new_rlimit)) {
+    g_critical ("Failed to raise nofile rlimit: %s, max open files is %" G_GUINT64_FORMAT,
+                g_strerror (errno),
+                (guint64)self->saved_nofile_rlimit.rlim_cur);
+    return;
+  }
+
+  g_debug ("Updated nofile current rlimit to %" G_GUINT64_FORMAT, (guint64)new_rlimit.rlim_cur);
 }
 
 
@@ -191,14 +324,52 @@ on_shell_state_changed (PhocServer *self, GParamSpec *pspec, PhocPhoshPrivate *p
   case PHOC_PHOSH_PRIVATE_SHELL_STATE_UP:
     /* Shell is up, lower shields */
     wl_list_for_each (output, &self->desktop->outputs, link)
-      phoc_output_lower_shield (output);
+      phoc_output_lower_shield (output, PHOC_EASING_EASE_IN_CUBIC, 0);
+    /* don't show session init spinner again */
+    self->show_spinner = FALSE;
+    self->allow_input = TRUE;
     break;
   case PHOC_PHOSH_PRIVATE_SHELL_STATE_UNKNOWN:
   default:
     /* Shell is gone, raise shields */
-    /* TODO: prevent input without a shell attached */
     wl_list_for_each (output, &self->desktop->outputs, link)
-      phoc_output_raise_shield (output);
+      phoc_output_raise_shield (output, self->show_spinner);
+    self->allow_input = FALSE;
+  }
+}
+
+
+static void
+phoc_server_init_protocols (PhocServer *self)
+{
+  struct wlr_xdg_toplevel_tag_manager_v1 *xdg_toplevel_tag_manager_v1;
+
+  self->ext_data_control_manager_v1 = wlr_ext_data_control_manager_v1_create (self->wl_display, 1);
+  self->ext_image_copy_capture_manager_v1 =
+    wlr_ext_image_copy_capture_manager_v1_create (self->wl_display, 1);
+  wlr_ext_output_image_capture_source_manager_v1_create (self->wl_display, 1);
+
+  self->xdg_shell = wlr_xdg_shell_create (self->wl_display, PHOC_XDG_SHELL_VERSION);
+  wl_signal_add (&self->xdg_shell->events.new_toplevel, &self->xdg_shell_toplevel);
+  self->xdg_shell_toplevel.notify = phoc_handle_xdg_shell_toplevel;
+
+  self->xdg_wm_dialog = wlr_xdg_wm_dialog_v1_create (self->wl_display, PHOC_XDG_DIALOG_VERSION);
+  wl_signal_add (&self->xdg_wm_dialog->events.new_dialog, &self->xdg_new_dialog);
+  self->xdg_new_dialog.notify = phoc_handle_xdg_new_dialog;
+
+  self->xdg_decoration_manager = wlr_xdg_decoration_manager_v1_create (self->wl_display);
+  wl_signal_add (&self->xdg_decoration_manager->events.new_toplevel_decoration,
+                 &self->xdg_toplevel_decoration);
+  self->xdg_toplevel_decoration.notify = phoc_handle_xdg_toplevel_decoration;
+
+  xdg_toplevel_tag_manager_v1 = wlr_xdg_toplevel_tag_manager_v1_create (self->wl_display, 1);
+  if (xdg_toplevel_tag_manager_v1) {
+    self->xdg_toplevel_tag_manager_v1_set_tag.notify =
+      phoc_xdg_toplevel_tag_manager_v1_handle_set_tag;
+    wl_signal_add (&xdg_toplevel_tag_manager_v1->events.set_tag,
+                   &self->xdg_toplevel_tag_manager_v1_set_tag);
+  } else {
+    g_critical ("Failed to create XDG toplevel tag manager");
   }
 }
 
@@ -212,6 +383,18 @@ phoc_server_client_has_security_context (PhocServer *self, const struct wl_clien
   context = wlr_security_context_manager_v1_lookup_client (desktop->security_context_manager_v1,
                                                            (struct wl_client *)client);
   return context != NULL;
+}
+
+
+static gboolean
+phoc_server_is_privileged_protocol (PhocServer *self, const struct wl_global *global)
+{
+  if (phoc_desktop_is_privileged_protocol (self->desktop, global))
+    return true;
+
+  return
+    global == self->ext_data_control_manager_v1->global ||
+    global == self->ext_image_copy_capture_manager_v1->global;
 }
 
 
@@ -229,12 +412,22 @@ phoc_server_filter_globals (const struct wl_client *client,
 #endif
 
   /* Clients with a security context can request privileged protocols */
-  if (phoc_desktop_is_privileged_protocol (self->desktop, global) &&
+  if (phoc_server_is_privileged_protocol (self, global) &&
       phoc_server_client_has_security_context (self, client)) {
     return false;
   }
 
   return true;
+}
+
+
+static void
+handle_new_surface (struct wl_listener *listener, void *data)
+{
+  struct wlr_surface *surface = data;
+
+  /* Ref is dropped on surface destroy */
+  phoc_surface_new (surface);
 }
 
 
@@ -244,10 +437,9 @@ phoc_server_initable_init (GInitable    *initable,
                            GError      **error)
 {
   PhocServer *self = PHOC_SERVER (initable);
-  PhocServerPrivate *priv = phoc_server_get_instance_private (self);
   struct wlr_renderer *wlr_renderer;
 
-  self->wl_display = wl_display_create();
+  self->wl_display = wl_display_create ();
   if (self->wl_display == NULL) {
     g_set_error (error,
                  G_FILE_ERROR, G_FILE_ERROR_FAILED,
@@ -255,8 +447,10 @@ phoc_server_initable_init (GInitable    *initable,
     return FALSE;
   }
   wl_display_set_global_filter (self->wl_display, phoc_server_filter_globals, self);
+  wl_display_set_default_max_buffer_size (self->wl_display, 1024 * 1024);
 
-  self->backend = wlr_backend_autocreate (self->wl_display, &priv->session);
+  self->backend = wlr_backend_autocreate (wl_display_get_event_loop (self->wl_display),
+                                          &self->session);
   if (self->backend == NULL) {
     g_set_error (error,
                  G_FILE_ERROR, G_FILE_ERROR_FAILED,
@@ -265,25 +459,32 @@ phoc_server_initable_init (GInitable    *initable,
   }
 
   self->renderer = phoc_renderer_new (self->backend, error);
-  if (self->renderer == NULL) {
+  if (self->renderer == NULL)
     return FALSE;
-  }
   wlr_renderer = phoc_renderer_get_wlr_renderer (self->renderer);
   wlr_renderer_init_wl_shm (wlr_renderer, self->wl_display);
 
-  if (wlr_renderer_get_dmabuf_texture_formats (wlr_renderer)) {
+  if (wlr_renderer_get_texture_formats (wlr_renderer, WLR_BUFFER_CAP_DMABUF)) {
     wlr_drm_create (self->wl_display, wlr_renderer);
-    priv->linux_dmabuf_v1 = wlr_linux_dmabuf_v1_create_with_renderer (self->wl_display,
+    self->linux_dmabuf_v1 = wlr_linux_dmabuf_v1_create_with_renderer (self->wl_display,
                                                                       PHOC_LINUX_DMABUF_VERSION,
                                                                       wlr_renderer);
   } else {
-    g_message ("Linux dmabuf support unavailale");
+    g_message ("Linux dmabuf support unavailable");
   }
 
-  self->data_device_manager = wlr_data_device_manager_create(self->wl_display);
+  self->data_device_manager = wlr_data_device_manager_create (self->wl_display);
 
-  self->compositor = wlr_compositor_create (self->wl_display, PHOC_WL_DISPLAY_VERSION, wlr_renderer);
+  self->compositor = wlr_compositor_create (self->wl_display,
+                                            PHOC_WL_DISPLAY_VERSION,
+                                            wlr_renderer);
+  wl_signal_add (&self->compositor->events.new_surface, &self->new_surface);
+  self->new_surface.notify = handle_new_surface;
+
   self->subcompositor = wlr_subcompositor_create (self->wl_display);
+
+  self->debug_control = phoc_debug_control_new (self);
+  phoc_debug_control_set_exported (self->debug_control, TRUE);
 
   return TRUE;
 }
@@ -297,17 +498,66 @@ phoc_server_initable_iface_init (GInitableIface *iface)
 
 
 static void
+phoc_server_set_property (GObject      *object,
+                          guint         property_id,
+                          const GValue *value,
+                          GParamSpec   *pspec)
+{
+  PhocServer *self = PHOC_SERVER (object);
+
+  switch (property_id) {
+  case PROP_DEBUG_FLAGS:
+    phoc_server_set_debug_flags (self, g_value_get_flags (value));
+    break;
+  case PROP_LOG_DOMAINS:
+    phoc_server_set_log_domains (self, g_value_get_boxed (value));
+    break;
+  default:
+    G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
+    break;
+  }
+}
+
+
+static void
+phoc_server_get_property (GObject    *object,
+                          guint       property_id,
+                          GValue     *value,
+                          GParamSpec *pspec)
+{
+  PhocServer *self = PHOC_SERVER (object);
+
+  switch (property_id) {
+  case PROP_DEBUG_FLAGS:
+    g_value_set_flags (value, phoc_server_get_debug_flags (self));
+    break;
+  case PROP_LOG_DOMAINS:
+    g_value_set_boxed (value, phoc_server_get_log_domains (self));
+    break;
+  default:
+    G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
+    break;
+  }
+}
+
+
+static void
 phoc_server_dispose (GObject *object)
 {
   PhocServer *self = PHOC_SERVER (object);
 
+  wl_display_destroy_clients (self->wl_display);
+
+  g_clear_object (&self->input);
+
+  g_clear_object (&self->renderer);
+
   if (self->backend) {
-    wl_display_destroy_clients (self->wl_display);
-    wlr_backend_destroy(self->backend);
+    wlr_backend_destroy (self->backend);
     self->backend = NULL;
   }
 
-  g_clear_object (&self->renderer);
+  g_clear_object (&self->debug_control);
 
   G_OBJECT_CLASS (phoc_server_parent_class)->dispose (object);
 }
@@ -316,22 +566,29 @@ static void
 phoc_server_finalize (GObject *object)
 {
   PhocServer *self = PHOC_SERVER (object);
-  PhocServerPrivate *priv = phoc_server_get_instance_private (self);
 
-  g_clear_pointer (&priv->dt_compatibles, g_strfreev);
+  wl_list_remove (&self->xdg_toplevel_tag_manager_v1_set_tag.link);
+  wl_list_remove (&self->xdg_toplevel_decoration.link);
+  wl_list_remove (&self->xdg_shell_toplevel.link);
+  wl_list_remove (&self->xdg_new_dialog.link);
+  wl_list_remove (&self->new_surface.link);
+
+  g_clear_pointer (&self->dt_compatibles, g_strfreev);
   g_clear_handle_id (&self->wl_source, g_source_remove);
-  g_clear_object (&self->input);
   g_clear_object (&self->desktop);
-  g_clear_pointer (&self->session, g_free);
+  g_clear_pointer (&self->session_exec, g_free);
 
   if (self->inited) {
-    g_unsetenv("WAYLAND_DISPLAY");
+    g_unsetenv ("WAYLAND_DISPLAY");
     self->inited = FALSE;
   }
 
   g_clear_pointer (&self->config, phoc_config_destroy);
 
+  wl_display_terminate (self->wl_display);
   g_clear_pointer (&self->wl_display, wl_display_destroy);
+
+  g_clear_pointer (&self->log_domains, g_strfreev);
 
   G_OBJECT_CLASS (phoc_server_parent_class)->finalize (object);
 }
@@ -342,17 +599,56 @@ phoc_server_class_init (PhocServerClass *klass)
 {
   GObjectClass *object_class = G_OBJECT_CLASS (klass);
 
+  object_class->get_property = phoc_server_get_property;
+  object_class->set_property = phoc_server_set_property;
   object_class->finalize = phoc_server_finalize;
   object_class->dispose = phoc_server_dispose;
+
+  /**
+   * PhocServer:debug-flags
+   *
+   * The debug flags currently active
+   */
+  props[PROP_DEBUG_FLAGS] =
+    g_param_spec_flags ("debug-flags", "", "",
+                        PHOC_TYPE_SERVER_DEBUG_FLAGS,
+                        PHOC_SERVER_DEBUG_FLAG_NONE,
+                        G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
+  /**
+   * PhocServer:log-domains
+   *
+   * The current log domains
+   */
+  props[PROP_LOG_DOMAINS] =
+    g_param_spec_boxed ("log-domains", "", "",
+                        G_TYPE_STRV,
+                        G_PARAM_READWRITE | G_PARAM_EXPLICIT_NOTIFY | G_PARAM_STATIC_STRINGS);
+
+  g_object_class_install_properties (object_class, PROP_LAST_PROP, props);
 }
+
 
 static void
 phoc_server_init (PhocServer *self)
 {
-  PhocServerPrivate *priv = phoc_server_get_instance_private(self);
+  const char *messages_debug;
   g_autoptr (GError) err = NULL;
 
-  priv->dt_compatibles = gm_device_tree_get_compatibles (NULL, &err);
+  wl_list_init (&self->new_surface.link);
+  wl_list_init (&self->xdg_new_dialog.link);
+  wl_list_init (&self->xdg_shell_toplevel.link);
+  wl_list_init (&self->xdg_toplevel_decoration.link);
+  wl_list_init (&self->xdg_toplevel_tag_manager_v1_set_tag.link);
+
+  /* show a spinner the first time output shield is raised */
+  self->show_spinner = TRUE;
+  self->dt_compatibles = gm_device_tree_get_compatibles (NULL, &err);
+
+  messages_debug = g_getenv ("G_MESSAGES_DEBUG");
+  if (messages_debug)
+    self->log_domains = g_strsplit (messages_debug, " ", -1);
+
+  self->settings = g_settings_new ("mobi.phosh.phoc");
 }
 
 /**
@@ -369,7 +665,7 @@ phoc_server_get_default (void)
 
   if (G_UNLIKELY (instance == NULL)) {
     g_autoptr (GError) err = NULL;
-    g_debug("Creating server");
+    g_debug ("Creating server");
     instance = g_initable_new (PHOC_TYPE_SERVER, NULL, &err, NULL);
     if (instance == NULL) {
       g_critical ("Failed to create server: %s", err->message);
@@ -389,7 +685,6 @@ phoc_server_get_default (void)
  * @exec: The executable to run
  * @mainloop:(transfer none): The mainloop
  * @flags: The flags to use for spawning the server
- * @debug_flags: The debug flags to use
  *
  * Perform wayland server initialization: parse command line and config,
  * create the wayland socket, setup env vars.
@@ -397,40 +692,45 @@ phoc_server_get_default (void)
  * Returns: %TRUE on success, %FALSE otherwise
  */
 gboolean
-phoc_server_setup (PhocServer *self, PhocConfig *config,
-                   const char *session, GMainLoop *mainloop,
-                   PhocServerFlags flags,
-                   PhocServerDebugFlags debug_flags)
+phoc_server_setup (PhocServer     *self,
+                   PhocConfig     *config,
+                   const char     *exec,
+                   GMainLoop      *mainloop,
+                   PhocServerFlags flags)
 {
+  const char *socket = NULL;
+
   g_assert (!self->inited);
+
+  phoc_server_init_protocols (self);
 
   self->config = config;
   self->flags = flags;
-  self->debug_flags = debug_flags;
   self->mainloop = mainloop;
-  self->exit_status = 1;
-  self->desktop = phoc_desktop_new (self->config);
+  self->desktop = phoc_desktop_new ();
   self->input = phoc_input_new ();
-  self->session = g_strdup (session);
-  self->mainloop = mainloop;
+  self->session_exec = g_strdup (exec);
 
-  const char *socket = wl_display_add_socket_auto(self->wl_display);
+  if (config->socket) {
+    if (wl_display_add_socket (self->wl_display, config->socket) == 0)
+      socket = config->socket;
+  } else {
+    socket = wl_display_add_socket_auto (self->wl_display);
+  }
+
   if (!socket) {
-    g_warning("Unable to open wayland socket: %s", strerror(errno));
-    wlr_backend_destroy(self->backend);
+    g_warning ("Unable to open wayland socket: %s", strerror (errno));
     return FALSE;
   }
 
   g_print ("Running compositor on wayland display '%s'\n", socket);
 
-  if (!wlr_backend_start(self->backend)) {
-    g_warning("Failed to start backend");
-    wlr_backend_destroy(self->backend);
-    wl_display_destroy(self->wl_display);
+  if (!wlr_backend_start (self->backend)) {
+    g_warning ("Failed to start backend");
     return FALSE;
   }
 
-  g_setenv("WAYLAND_DISPLAY", socket, true);
+  g_setenv ("WAYLAND_DISPLAY", socket, true);
 
   if (self->flags & PHOC_SERVER_FLAG_SHELL_MODE) {
     g_message ("Enabling shell mode");
@@ -439,10 +739,15 @@ phoc_server_setup (PhocServer *self, PhocConfig *config,
                              G_CALLBACK (on_shell_state_changed),
                              self, G_CONNECT_SWAPPED);
     on_shell_state_changed (self, NULL, phoc_desktop_get_phosh_private (self->desktop));
+  } else {
+    self->allow_input = TRUE;
   }
 
   phoc_wayland_init (self);
-  if (self->session)
+
+  phoc_server_raise_nofile_rlimit (self);
+
+  if (self->session_exec)
     phoc_startup_session (self);
 
   self->inited = TRUE;
@@ -451,6 +756,7 @@ phoc_server_setup (PhocServer *self, PhocConfig *config,
 
 /**
  * phoc_server_get_exit_status:
+ * @self: The server
  *
  * Return the session's exit status. This is only meaningful
  * if the session has ended.
@@ -460,11 +766,32 @@ phoc_server_setup (PhocServer *self, PhocConfig *config,
 gint
 phoc_server_get_session_exit_status (PhocServer *self)
 {
+  g_assert (PHOC_IS_SERVER (self));
+
   return self->exit_status;
 }
 
 /**
+ * phoc_server_get_session_exec:
+ * @self: The server
+ *
+ * Return the command that will be run to start the session
+ *
+ * Returns: The command run at startup
+ */
+const char *
+phoc_server_get_session_exec (PhocServer *self)
+{
+  g_assert (PHOC_IS_SERVER (self));
+
+  return self->session_exec;
+}
+
+/**
  * phoc_server_get_renderer:
+ * @self: The server
+ *
+ * Gets the renderer object
  *
  * Returns: (transfer none): The renderer
  */
@@ -478,6 +805,9 @@ phoc_server_get_renderer (PhocServer *self)
 
 /**
  * phoc_server_get_desktop:
+ * @self: The server
+ *
+ * Gets the desktop singleton
  *
  * Returns: (transfer none): The desktop
  */
@@ -490,9 +820,134 @@ phoc_server_get_desktop (PhocServer *self)
 }
 
 /**
- * phoc_server_get_last_active_seat:
+ * phoc_server_get_input:
+ * @self: The server
  *
- * Get's the last active seat.
+ * Get the device handling new input devices and seats.
+ *
+ * Returns:(transfer none): The input
+ */
+PhocInput *
+phoc_server_get_input (PhocServer *self)
+{
+  g_assert (PHOC_IS_SERVER (self));
+
+  return self->input;
+}
+
+/**
+ * phoc_server_get_config:
+ * @self: The server
+ *
+ * Get the object that has the config file content.
+ *
+ * Returns:(transfer none): The config
+ */
+PhocConfig *
+phoc_server_get_config (PhocServer *self)
+{
+  g_assert (PHOC_IS_SERVER (self));
+
+  return self->config;
+}
+
+/**
+ * phoc_server_check_debug_flags:
+ * @self: The server
+ * @check: The flags to check
+ *
+ * Checks if the given debug flags are set in this server
+ *
+ * Returns: %TRUE if all of the given flags are set, otherwise %FALSE
+ */
+gboolean
+phoc_server_check_debug_flags (PhocServer *self, PhocServerDebugFlags check)
+{
+  g_assert (PHOC_IS_SERVER (self));
+
+  return !!(self->debug_flags & check);
+}
+
+/**
+ * phoc_server_set_debug_flags:
+ * @self: The server
+ * @flags: The debug flags
+ *
+ * Set the currently enabled debug flags
+ */
+void
+phoc_server_set_debug_flags (PhocServer *self, PhocServerDebugFlags flags)
+{
+  g_assert (PHOC_IS_SERVER (self));
+
+  if (self->debug_flags == flags)
+    return;
+
+  self->debug_flags = flags;
+  g_object_notify_by_pspec (G_OBJECT (self), props[PROP_DEBUG_FLAGS]);
+}
+
+/**
+ * phoc_server_get_debug_flags:
+ * @self: The server
+ *
+ * Get the debug flags
+ */
+PhocServerDebugFlags
+phoc_server_get_debug_flags (PhocServer *self)
+{
+  g_assert (PHOC_IS_SERVER (self));
+
+  return self->debug_flags;
+}
+
+/**
+ * phoc_server_set_log_domains:
+ * @self: The server
+ * @log_domains: The log domains
+ *
+ * Set the currently enabled logging domains
+ */
+void
+phoc_server_set_log_domains (PhocServer *self, const char *const *log_domains)
+{
+  g_assert (PHOC_IS_SERVER (self));
+
+  if (!self->log_domains && !log_domains)
+    return;
+
+  if (self->log_domains && log_domains &&
+      g_strv_equal ((const char *const *)self->log_domains, log_domains)) {
+    return;
+  }
+
+  g_strfreev (self->log_domains);
+  self->log_domains = g_strdupv ((GStrv)log_domains);
+
+  g_log_writer_default_set_debug_domains (log_domains);
+
+  g_object_notify_by_pspec (G_OBJECT (self), props[PROP_LOG_DOMAINS]);
+}
+
+/**
+ * phoc_server_get_log_domains:
+ * @self: The server
+ *
+ * Get the logging domains
+ */
+const char *const *
+phoc_server_get_log_domains (PhocServer *self)
+{
+  g_assert (PHOC_IS_SERVER (self));
+
+  return (const char *const *)self->log_domains;
+}
+
+/**
+ * phoc_server_get_last_active_seat:
+ * @self: The server
+ *
+ * Gets the last active seat.
  *
  * Returns: (transfer none): The last active seat.
  */
@@ -508,24 +963,55 @@ phoc_server_get_last_active_seat (PhocServer *self)
 const char * const *
 phoc_server_get_compatibles (PhocServer *self)
 {
-  PhocServerPrivate *priv;
-
   g_assert (PHOC_IS_SERVER (self));
-  priv = phoc_server_get_instance_private (self);
 
-  return (const char * const *)priv->dt_compatibles;
+  return (const char * const *)self->dt_compatibles;
+}
+
+
+void
+phoc_server_set_compatibles (PhocServer *self, const char *const *compatibles)
+{
+  g_assert (PHOC_IS_SERVER (self));
+
+  g_strfreev (self->dt_compatibles);
+  self->dt_compatibles = g_strdupv ((GStrv)compatibles);
+}
+
+
+struct wl_display *
+phoc_server_get_wl_display (PhocServer *self)
+{
+  g_assert (PHOC_IS_SERVER (self));
+
+  return self->wl_display;
+}
+
+
+struct wlr_backend *
+phoc_server_get_backend (PhocServer *self)
+{
+  g_assert (PHOC_IS_SERVER (self));
+
+  return self->backend;
+}
+
+
+struct wlr_compositor *
+phoc_server_get_compositor (PhocServer *self)
+{
+  g_assert (PHOC_IS_SERVER (self));
+
+  return self->compositor;
 }
 
 
 struct wlr_session *
 phoc_server_get_session (PhocServer *self)
 {
-  PhocServerPrivate *priv;
-
   g_assert (PHOC_IS_SERVER (self));
-  priv = phoc_server_get_instance_private (self);
 
-  return priv->session;
+  return self->session;
 }
 
 
@@ -535,12 +1021,10 @@ phoc_server_set_linux_dmabuf_surface_feedback (PhocServer *self,
                                                PhocOutput *output,
                                                bool        enable)
 {
-  PhocServerPrivate *priv;
-
   g_assert (PHOC_IS_SERVER (self));
-  priv = phoc_server_get_instance_private (self);
+  g_assert (PHOC_IS_VIEW (view));
 
-  if (!priv->linux_dmabuf_v1 || !view->wlr_surface)
+  if (!self->linux_dmabuf_v1 || !view->wlr_surface)
     return;
 
   g_assert ((enable && output && output->wlr_output) || (!enable && !output));
@@ -555,9 +1039,27 @@ phoc_server_set_linux_dmabuf_surface_feedback (PhocServer *self,
     if (!wlr_linux_dmabuf_feedback_v1_init_with_options (&feedback, &options))
       return;
 
-    wlr_linux_dmabuf_v1_set_surface_feedback (priv->linux_dmabuf_v1, view->wlr_surface, &feedback);
+    wlr_linux_dmabuf_v1_set_surface_feedback (self->linux_dmabuf_v1, view->wlr_surface, &feedback);
     wlr_linux_dmabuf_feedback_v1_finish (&feedback);
   } else {
-    wlr_linux_dmabuf_v1_set_surface_feedback (priv->linux_dmabuf_v1, view->wlr_surface, NULL);
+    wlr_linux_dmabuf_v1_set_surface_feedback (self->linux_dmabuf_v1, view->wlr_surface, NULL);
   }
+}
+
+
+gboolean
+phoc_server_get_allow_input (PhocServer *self)
+{
+  g_assert (PHOC_IS_SERVER (self));
+
+  return self->allow_input;
+}
+
+
+gboolean
+phoc_server_get_use_focus_frame (PhocServer *self)
+{
+  g_assert (PHOC_IS_SERVER (self));
+
+  return g_settings_get_boolean (self->settings, "focus-frame");
 }

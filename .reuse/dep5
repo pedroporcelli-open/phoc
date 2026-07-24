@@ -18,6 +18,12 @@ Files:
 Copyright: See individual files
 License: MIT
 
+# Imported from wayland-protocols
+Files:
+ protocols/xx-cutouts-v1.xml
+Copyright: See individual files
+License: MIT
+
 # Imported from GTK
 Files:
  protocols/gtk-shell.xml
@@ -32,12 +38,18 @@ Files:
 Copyright: See individual files
 License: MIT
 
+# DBus protocols have the same copyright as the code
+Files:
+ src/dbus/*.xml
+Copyright: See individual files
+License: GPL-3.0-or-later
+
 # Test data has the same copyright as the tests
 Files:
  tests/data/phosh,tiny.json
  tests/phoc.ini
  tests/screenshots/*
-Copyright: The Phoc authors
+Copyright: The Phosh Developers
 License: GPL-3.0-or-later
 
 # These were initially developed in rootston under MIT
@@ -49,8 +61,8 @@ Files:
  src/desktop.h
  src/input.c
  src/input.h
- src/layer_shell.c
- src/layers.h
+ src/layer-shell.c
+ src/layer-shell.h
  src/output.c
  src/output.h
  src/pointer.c
@@ -59,18 +71,17 @@ Files:
  src/settings.h
  src/switch.c
  src/tablet.c
- src/text_input.c
- src/text_input.h
+ src/input-method-relay.c
+ src/input-method-relay.h
  src/touch.c
  src/view.c
  src/view.h
  src/virtual.c
  src/virtual.h
- src/xcursor.h
- src/xdg_shell.c
+ src/xdg-toplevel-decoration.c
 Copyright:
  The wlroots authors
- The Phoc authors
+ The Phosh Developers
 License: GPL-3.0-or-later or MIT
 
 # No point in adding indiviual information to tiny files or
@@ -81,33 +92,38 @@ Files:
  .gitignore
  .gitlab-ci/Makefile
  .gitlab-ci/README.md
- .gitlab-ci/check-po
  .gitlab-ci/check-style.py
  .gitlab-ci/commit-rules.yml
  .gitlab-ci/debian.Dockerfile
  .gitlab-ci/run-docker.sh
  .gitlab-ci/uncrustify.cfg
  .gitlab-ci.yml
- HACKING.md
+ CONTRIBUTING.md
  NEWS
  README.md
- data/icons/sm.puri.Phoc.svg
+ data/icons/mobi.phosh.Phoc.svg
  data/leak-suppress.txt
  data/phoc-dev.in
  data/phoc-dev.ini
  data/phoc-dev.service.in
- data/sm.puri.Phoc.desktop.in.in
- data/sm.puri.phoc.gschema.xml
+ data/mobi.phosh.Phoc.desktop.in.in
+ data/mobi.phosh.phoc.gschema.xml
  debian/*
  doc/gettingstarted.md
+ doc/phoc.gsettings.rst
  doc/phoc.ini.rst
  doc/phoc.rst
  doc/phoc.toml.in
+ doc/phoc-outputs-states.rst
+ examples/shaders/cutout-rect.frag
+ examples/shaders/cutout-rect.vert
+ examples/shaders/embed.sh
  gcovr.cfg
- helpers/*
+ tools/*
  meson.build
  */meson.build
  meson_options.txt
+ po/LINGUAS
  po/POTFILES.in
  po/POTFILES.skip
  phoc-config.h.in
@@ -117,6 +133,7 @@ Files:
  src/phoc.ini.example
  subprojects/gi-docgen.wrap
  subprojects/gmobile.wrap
+ subprojects/gvdb.wrap
  subprojects/wlroots.wrap
 Copyright: The Phoc authors
 License: GPL-3.0-or-later

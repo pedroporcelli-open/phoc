@@ -7,24 +7,26 @@ Build-Depends:
  gsettings-desktop-schemas,
  gi-docgen <!nodoc>,
  libglib2.0-dev,
+ libgmobile-dev,
  libgnome-desktop-3-dev,
  libinput-dev,
  libjson-glib-dev,
  libpixman-1-dev,
  libwayland-dev,
- libxkbcommon-dev,
+ libxkbcommon-dev (>= 1.8.0),
  meson (>= 0.54.0),
- pkg-config,
+ pkgconf,
  wayland-protocols,
  libxcb1-dev,
- libwlroots-dev (>= 0.17.1) <!pkg.phoc.embedwlroots>,
- libwlroots-dev (<< 0.18.0) <!pkg.phoc.embedwlroots>,
- xwayland,
+ libwlroots-0.20-dev <!pkg.phoc.embedwlroots>,
+ xwayland (>= 1.23.0),
 # For wlroots subproject build
+ glslang-tools <pkg.phoc.embedwlroots>,
  hwdata <pkg.phoc.embedwlroots>,
  libcap-dev <pkg.phoc.embedwlroots>,
+ liblcms2-dev <pkg.phoc.embedwlroots>,
  libdisplay-info-dev (>= 0.1.1) <pkg.phoc.embedwlroots>,
- libdrm-dev (>= 2.4.95) <pkg.phoc.embedwlroots>,
+ libdrm-dev (>= 2.4.118) <pkg.phoc.embedwlroots>,
  libegl1-mesa-dev <pkg.phoc.embedwlroots>,
  libgbm-dev (>= 17.1.0) <pkg.phoc.embedwlroots>,
  libgles2-mesa-dev <pkg.phoc.embedwlroots>,
@@ -32,8 +34,10 @@ Build-Depends:
  libpng-dev <pkg.phoc.embedwlroots>,
  libseat-dev <pkg.phoc.embedwlroots>,
  libsystemd-dev <pkg.phoc.embedwlroots>,
+ libvulkan-dev <pkg.phoc.embedwlroots>,
  libx11-xcb-dev <pkg.phoc.embedwlroots>,
  libxcb-composite0-dev <pkg.phoc.embedwlroots>,
+ libxcb-errors-dev <pkg.phoc.embedwlroots>,
  libxcb-ewmh-dev <pkg.phoc.embedwlroots>,
  libxcb-icccm4-dev <pkg.phoc.embedwlroots>,
  libxcb-image0-dev <pkg.phoc.embedwlroots>,
@@ -55,6 +59,8 @@ Build-Depends:
  python3-toml <!nodoc>,
  python3-typogrify <!nodoc>,
 # Needed to run the tests
+ desktop-file-utils <!nocheck>,
+ libglib2.0-bin <!nocheck>,
  mutter-common <!nocheck>,
  xvfb <!nocheck>,
  xauth <!nocheck>,
@@ -79,5 +85,5 @@ Breaks:
 Description: Wayland compositor for mobile phones
  Tiny wayland compositor based on wlroots for use on mobile phones like the
  Librem 5.
- . 
+ .
  You likely want to use Phosh (the phone shell) with it.

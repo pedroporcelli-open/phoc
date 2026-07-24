@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2023 Guido Günther
+ * Copyright (C) 2023-2025 Phosh.mobi e.V.
  *
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -15,11 +15,26 @@ G_BEGIN_DECLS
 
 #define PHOC_TYPE_COLOR_RECT (phoc_color_rect_get_type ())
 
-G_DECLARE_FINAL_TYPE (PhocColorRect, phoc_color_rect, PHOC, COLOR_RECT, GObject)
+/**
+ * PhocColorRectClass:
+ * @parent_class: The parent class
+ */
+struct _PhocColorRectClass
+{
+  GObjectClass parent_class;
+};
+
+G_DECLARE_DERIVABLE_TYPE (PhocColorRect, phoc_color_rect, PHOC, COLOR_RECT, GObject)
 
 PhocColorRect      *phoc_color_rect_new                         (PhocBox       *box,
                                                                  PhocColor     *color);
 PhocBox             phoc_color_rect_get_box                     (PhocColorRect *self) G_GNUC_WARN_UNUSED_RESULT;
+void                phoc_color_rect_set_box                     (PhocColorRect *self, PhocBox *box);
 PhocColor           phoc_color_rect_get_color                   (PhocColorRect *self) G_GNUC_WARN_UNUSED_RESULT;
+void                phoc_color_rect_set_color                   (PhocColorRect *self,
+                                                                 PhocColor     *color);
+float               phoc_color_rect_get_alpha                   (PhocColorRect *self) G_GNUC_WARN_UNUSED_RESULT;
+void                phoc_color_rect_set_alpha                   (PhocColorRect *self,
+                                                                 float          alpha);
 
 G_END_DECLS

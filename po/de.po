@@ -1,4 +1,4 @@
-# German translation for pohc
+# German translation for phoc
 # Copyright (C) 2023 THE PACKAGE'S COPYRIGHT HOLDER
 # This file is distributed under the same license as the phoc package.
 # Guido Günther <agx@sigxcpu.org>, 2023
@@ -18,11 +18,11 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 
-#: data/sm.puri.Phoc.desktop.in.in:4
+#: data/mobi.phosh.Phoc.desktop.in.in:4
 msgid "Phone Compositor"
 msgstr "Phone Compositor"
 
-#: data/sm.puri.Phoc.desktop.in.in:5
+#: data/mobi.phosh.Phoc.desktop.in.in:5
 msgid "Wayland compositor for mobile"
 msgstr "Wayland Compositor für Mobilgeräte"
 

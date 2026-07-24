@@ -1,15 +1,18 @@
+---
 include:
- - project: 'guidog/meta-phosh'
-   ref: '04a85df2f3311f3012b6c49bf353b376ae0f32b2'
-   file: '/ci/phosh-common-jobs.yml'
- - remote: 'https://gitlab.freedesktop.org/freedesktop/ci-templates/-/raw/d03cddbcff35f26861429fc816c00323f48e99af/templates/ci-fairy.yml'
+  - project: 'World/Phosh/meta-phosh'
+    ref: '4a59c2bce9fe230614431a21638a05f3a30da7f3'
+    file: '/ci/phosh-common-jobs.yml'
+  - project: 'Infrastructure/freedesktop-ci-templates'
+    ref: 'd03cddbcff35f26861429fc816c00323f48e99af'
+    file: '/templates/ci-fairy.yml'
 
 stages:
- - build
- - test+docs
- - style-checks
- - package
- - deploy
+  - build
+  - test+docs
+  - style-checks
+  - package
+  - deploy
 
 workflow:
   rules:
@@ -45,9 +48,9 @@ variables:
         eudev-dev ffmpeg-dev glslang libdisplay-info-dev
         libliftoff-dev mesa-dev pixman-dev vulkan-headers vulkan-loader-dev
         wayland-dev wayland-protocols xcb-util-image-dev xcb-util-renderutil-dev
-        xcb-util-wm-dev libseat-dev hwdata-dev
+        xcb-util-wm-dev libseat-dev hwdata-dev libdisplay-info-dev
   XVFB_RUN: xvfb-run -s -noreset
-  DEBIAN_IMAGE: $CI_REGISTRY/world/phosh/phoc/debian:v0.0.2023-11-05.3
+  DEBIAN_IMAGE: $CI_REGISTRY/world/phosh/phoc/debian:v0.0.2026-07-06
 
 .build: &build
   script:
@@ -58,76 +61,65 @@ variables:
 
 .before_script_debian: &before_script_debian
   - rm -f ../* || true
-  # Don't accidentally pull in system headers
-  - eatmydata apt-get -y remove --purge libwlroots-dev
+  # Don't accidentally pull in system wlroots headers
+  - eatmydata apt-get -y remove --purge "libwlroots-.*dev"
+  - if [ -n "$SID_PKGS" ]; then
+      echo "deb http://deb.debian.org/debian/ sid main" >> /etc/apt/sources.list.d/sid.list;
+      eatmydata apt-get -y update;
+      apt -y install $SID_PKGS;
+    fi
   - dpkg -l
 
 .before_script_alpine: &before_script_alpine
   - apk -q add alpine-sdk
   - apk -q add $ALPINE_EDGE_DEPS $ALPINE_EDGE_WLROOTS_DEPS
 
-build-with-xwayland-debian-trixie:
+build-with-xwayland-debian-forky:
   stage: build
   image: ${DEBIAN_IMAGE}
   before_script: *before_script_debian
   variables:
-     BUILD_ARGS: -Dembed-wlroots=enabled -Dxwayland=enabled -Db_coverage=true
+    BUILD_ARGS: -Dembed-wlroots=enabled -Dxwayland=enabled -Db_coverage=true
   <<: *build
   artifacts:
     paths:
       - _build
-  except:
-    variables:
-      - $PKG_ONLY == "1"
 
-build-with-xwayland-debian-trixie-clang:
+build-with-xwayland-debian-forky-clang:
   stage: build
   image: ${DEBIAN_IMAGE}
   variables:
     CC: clang
-    BUILD_ARGS: -Dembed-wlroots=enabled -Dxwayland=enabled -Db_coverage=true --werror
-  before_script:
-    - eatmydata apt-get update
-    - eatmydata apt-get -y remove --purge libwlroots-dev
-    - eatmydata apt-get -y install clang
+    BUILD_ARGS: -Dembed-wlroots=enabled -Dxwayland=enabled --werror
+  before_script: *before_script_debian
   <<: *build
   artifacts:
     paths:
       - _build
-  except:
-    variables:
-      - $PKG_ONLY == "1"
 
 build-with-xwayland-alpinelinux-edge:
   stage: build
   image: alpine:edge
   before_script: *before_script_alpine
   variables:
-     BUILD_ARGS: -Dembed-wlroots=enabled -Dxwayland=enabled
+    BUILD_ARGS: -Dembed-wlroots=enabled -Dxwayland=enabled
   <<: *build
   allow_failure: true
-  except:
-    variables:
-      - $PKG_ONLY == "1"
 
 build-without-xwayland-alpinelinux-edge:
   stage: build
   image: alpine:edge
   before_script: *before_script_alpine
   variables:
-     BUILD_ARGS: -Dembed-wlroots=enabled -Dxwayland=disabled
+    BUILD_ARGS: -Dembed-wlroots=enabled -Dxwayland=disabled
   <<: *build
   allow_failure: true
-  except:
-    variables:
-      - $PKG_ONLY == "1"
 
-
-unit-test-with-xwayland-debian-trixie:
+unit-test-with-xwayland-debian-forky:
   stage: test+docs
   image: ${DEBIAN_IMAGE}
   needs:
-    - build-with-xwayland-debian-trixie
+    - build-with-xwayland-debian-forky
   before_script: *before_script_debian
   script:
     - WLR_RENDERER=pixman ${XVFB_RUN} meson test --print-errorlogs -C _build
@@ -140,24 +132,30 @@ unit-test-with-xwayland-debian-trixie:
         - _build/meson-logs/testlog.junit.xml
     paths:
       - _build
-  except:
-    variables:
-      - $PKG_ONLY == "1"
 
-asan-test-native-debian-trixie:
+asan-test-native-debian-forky:
   stage: test+docs
   image: ${DEBIAN_IMAGE}
-  tags: [ asan ]
+  tags: [asan]
   needs: []
   before_script: *before_script_debian
   script:
     - meson setup -Db_sanitize=address _build-asan
-    - ninja -C _build-asan data/gschemas.compiled
     - WLR_RENDERER=pixman ${XVFB_RUN} meson test --verbose -C _build-asan
-  except:
-    variables:
-      - $PKG_ONLY == "1"
   allow_failure: true
+
+scan-build-native-debian-forky:
+  stage: test+docs
+  image: ${DEBIAN_IMAGE}
+  needs:
+    - build-with-xwayland-debian-forky-clang
+  before_script: *before_script_debian
+  script:
+    - "SCANBUILD=${PWD}/tools/scan-build ninja -C _build scan-build"
+  artifacts:
+    when: on_failure
+    paths:
+      - _build/meson-logs/scanbuild/
 
 build-gtkdoc:
   stage: test+docs
@@ -169,24 +167,31 @@ build-gtkdoc:
     - git clean -dfx
     - 'echo "Build opts: ${BUILD_ARGS}"'
     - meson . _build $BUILD_ARGS
-    - helpers/doc-check _build
+    - tools/doc-check _build
     - test -f _build/doc/phoc-*/index.html
     - mv _build/doc/phoc-*/ _reference/
   artifacts:
     paths:
       - _reference
-  except:
-    variables:
-      - $PKG_ONLY == "1"
 
 check-po:
   stage: test+docs
   extends: .phosh-check-po
-  except:
-    variables:
-      - $PKG_ONLY == "1"
 
-format-check:
+check-consistency:
+  stage: test+docs
+  extends: .phosh-check-consistency
+
+check-dist:
+  stage: test+docs
+  extends: .phosh-check-dist
+  image: ${DEBIAN_IMAGE}
+  variables:
+    DEB_BUILD_PROFILES: 'pkg.phoc.embedwlroots'
+    MESON_DIST_OPTIONS: --no-tests --include-subprojects
+    MESON_OPTIONS: -Dembed-wlroots=enabled
+
+check-format:
   stage: style-checks
   image: ${DEBIAN_IMAGE}
   needs: []
@@ -211,7 +216,7 @@ format-check:
   allow_failure: true
 
 # Sanity checks of MR settings and commit logs
-commit-log-check:
+check-commit-log:
   extends:
     - .fdo.ci-fairy
   stage: style-checks
@@ -219,14 +224,14 @@ commit-log-check:
     GIT_DEPTH: "100"
   needs: []
   script: |
-    ci-fairy check-commits --junit-xml=commit-message-junit-report.xml
+    ci-fairy check-commits --signed-off-by --junit-xml=commit-message-junit-report.xml
   artifacts:
     reports:
       junit: commit-message-junit-report.xml
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == $CI_DEFAULT_BRANCH'
 
-license-check:
+check-license:
   stage: style-checks
   image: ${DEBIAN_IMAGE}
   needs: []
@@ -238,23 +243,39 @@ license-check:
   artifacts:
     paths:
       - _build
-  except:
-    variables:
-      - $PKG_ONLY == "1"
 
-package-deb-debian-trixie:arm64:
+check-markdown:
+  stage: style-checks
+  variables:
+    PHOSH_MARKDOWN_PATHS: "*.md doc/*.md"
+  extends:
+    - .phosh-check-markdown
+
+check-g-style:
+  stage: style-checks
+  variables:
+    PHOSH_BANNED_TYPES: "gchar gfloat gdouble gint"
+  extends:
+    - .phosh-check-g-style
+
+check-meson:
+  stage: style-checks
+  extends:
+    - .phosh-check-meson
+
+package-deb-debian-forky:arm64:
   stage: package
   variables:
-    PHOSH_DOCKER_IMAGE: debian:trixie
+    PHOSH_DOCKER_IMAGE: debian:forky
     DEB_BUILD_PROFILES: 'pkg.phoc.embedwlroots'
   extends: .phosh-build-debian-package
   tags:
     - aarch64
 
-package-deb-debian-trixie:sanitizers:arm64:
+package-deb-debian-forky:sanitizers:arm64:
   stage: package
   variables:
-    PHOSH_DOCKER_IMAGE: debian:trixie
+    PHOSH_DOCKER_IMAGE: debian:forky
     DEB_BUILD_PROFILES: 'pkg.phoc.embedwlroots pkg.phoc.sanitizers'
   extends: .phosh-build-debian-package
   tags:

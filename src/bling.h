@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2023 Guido Günther
+ * Copyright (C) 2023-2025 Phosh.mobi e.V.
  *
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
@@ -25,7 +25,7 @@ struct _PhocBlingInterface
    * PhocBlingInterface::get_box:
    * @self: A bilng
    *
-   * Get a minimal box in layout coordindates that contains the bling
+   * Get a minimal box in layout coordinates that contains the bling
    *
    * Returns: The box
    */
@@ -37,7 +37,7 @@ struct _PhocBlingInterface
    * Render the bling. Scissoring is handled by the renderer prior to invoking
    * this function.
    */
-  void          (*render)     (PhocBling *self, PhocOutput *output);
+  void          (*render)     (PhocBling *self, PhocRenderContext *ctx);
   /**
    * PhocBlingInterface::map:
    * @self: A bling
@@ -64,10 +64,11 @@ struct _PhocBlingInterface
 };
 
 void                    phoc_bling_render                        (PhocBling    *self,
-                                                                  PhocOutput   *render);
+                                                                  PhocRenderContext *ctx);
 PhocBox                 phoc_bling_get_box                       (PhocBling    *self);
 void                    phoc_bling_map                           (PhocBling    *self);
 void                    phoc_bling_unmap                         (PhocBling    *self);
 gboolean                phoc_bling_is_mapped                     (PhocBling    *self);
+void                    phoc_bling_damage_box                    (PhocBling    *self);
 
 G_END_DECLS

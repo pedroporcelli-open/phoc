@@ -1,5 +1,7 @@
-usr/include/wlr/*
-usr/include/wlr/backend/*
-usr/include/wlr/types/*
-usr/lib/*/libwlroots.*
-usr/lib/*/pkgconfig/wlroots.pc
+usr/include/gmobile/
+usr/include/wlroots-0.??/*
+usr/lib/*/libgmobile.*
+usr/lib/*/pkgconfig/gmobile.pc
+usr/lib/*/libwlroots-0.??.*
+usr/lib/*/pkgconfig/wlroots-0.??.pc
+usr/lib/udev/*/61-gmobile*

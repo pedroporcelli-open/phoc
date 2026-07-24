@@ -1,7 +1,10 @@
 /*
- * Copyright (C) 2023 Guido Günther <agx@sigxcpu.org>
+ * Copyright (C) 2023-2025 Phosh.mobi e.V.
+ *
  *
  * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * Author: Guido Günther <agx@sigxcpu.org>
  */
 
 #include "testlib.h"
@@ -12,31 +15,32 @@ test_client_xdg_decoration_server_side (PhocTestClientGlobals *globals, gpointer
 {
   PhocTestXdgToplevelSurface *xs;
   guint32 color = 0xFF00FF00;
-  struct zxdg_toplevel_decoration_v1 *toplevel_decoration_manager;
+  struct zxdg_toplevel_decoration_v1 *toplevel_decoration;
 
   xs = phoc_test_xdg_toplevel_new (globals, 0, 0, "server-side-decoration");
   g_assert_nonnull (xs);
 
-  toplevel_decoration_manager = zxdg_decoration_manager_v1_get_toplevel_decoration(
+  toplevel_decoration = zxdg_decoration_manager_v1_get_toplevel_decoration (
     globals->decoration_manager, xs->xdg_toplevel);
 
   /* As per protocol we need to set decoration before attaching a buffer */
-  zxdg_toplevel_decoration_v1_set_mode(toplevel_decoration_manager,
-                                       ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
+  zxdg_toplevel_decoration_v1_set_mode (toplevel_decoration,
+                                        ZXDG_TOPLEVEL_DECORATION_V1_MODE_SERVER_SIDE);
   wl_display_dispatch (globals->display);
 
   phoc_test_xdg_update_buffer (globals, xs, color);
+  wl_display_flush (globals->display);
 
   phoc_assert_screenshot (globals, "test-xdg-decoration-server-side-1.png");
 
-  zxdg_toplevel_decoration_v1_set_mode(toplevel_decoration_manager,
-                                       ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE);
+  zxdg_toplevel_decoration_v1_set_mode (toplevel_decoration,
+                                        ZXDG_TOPLEVEL_DECORATION_V1_MODE_CLIENT_SIDE);
   wl_display_dispatch (globals->display);
   phoc_test_xdg_update_buffer (globals, xs, color);
 
   phoc_assert_screenshot (globals, "test-xdg-decoration-client-side-1.png");
 
-  zxdg_toplevel_decoration_v1_destroy (toplevel_decoration_manager);
+  zxdg_toplevel_decoration_v1_destroy (toplevel_decoration);
   phoc_test_xdg_toplevel_free (xs);
 
   phoc_assert_screenshot (globals, "empty.png");
@@ -48,11 +52,14 @@ test_client_xdg_decoration_server_side (PhocTestClientGlobals *globals, gpointer
 static gboolean
 test_client_xdg_decoration_server_prepare (PhocServer *server, gpointer data)
 {
-  PhocDesktop *desktop = server->desktop;
+  PhocDesktop *desktop = phoc_server_get_desktop (server);
   gboolean maximize = GPOINTER_TO_INT (data);
+  g_autoptr (GSettings) settings = g_settings_new ("mobi.phosh.phoc");
 
   g_assert_nonnull (desktop);
   phoc_desktop_set_auto_maximize (desktop, maximize);
+  g_settings_set_boolean (settings, "focus-frame", FALSE);
+
   return TRUE;
 }
 
@@ -70,12 +77,12 @@ test_xdg_decoration_server_side (void)
 }
 
 
-gint
-main (gint argc, gchar *argv[])
+int
+main (int argc, char *argv[])
 {
   g_test_init (&argc, &argv, NULL);
 
   PHOC_TEST_ADD ("/phoc/xdg-decoration/server-side", test_xdg_decoration_server_side);
 
-  return g_test_run();
+  return g_test_run ();
 }

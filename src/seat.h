@@ -1,14 +1,17 @@
 /*
  * Copyright (C) 2021 Purism SPC
+ *               2025 The Phosh Developers
  *
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
 #pragma once
 
+#include "drag-icon.h"
 #include "input.h"
-#include "layers.h"
-#include "text_input.h"
+#include "input-method-relay.h"
+#include "workspace.h"
+#include "shortcuts-inhibit.h"
 
 #include <wlr/types/wlr_switch.h>
 
@@ -23,8 +26,6 @@ G_BEGIN_DECLS
 G_DECLARE_FINAL_TYPE (PhocSeat, phoc_seat, PHOC, SEAT, GObject)
 
 typedef struct _PhocCursor PhocCursor;
-typedef struct _PhocDragIcon PhocDragIcon;
-typedef struct _PhocTablet PhocTablet;
 
 /**
  * PhocSeat:
@@ -41,26 +42,24 @@ typedef struct _PhocSeat {
   struct wlr_seat                *seat;
   PhocCursor                     *cursor;
 
-  // coordinates of the first touch point if it exists
+  /* Coordinates of the first touch point if it exists */
   int32_t                         touch_id;
   double                          touch_x, touch_y;
 
-  // If the focused layer is set, views cannot receive keyboard focus
+  /*  If the focused layer is set, views cannot receive keyboard focus */
   struct wlr_layer_surface_v1    *focused_layer;
 
   PhocInputMethodRelay            im_relay;
 
-  struct wl_list                  views; // PhocSeatView::link
-  bool                            has_focus;
+  PhocDragIcon                   *drag_icon; /* (nullable) */
 
-  PhocDragIcon                   *drag_icon; // can be NULL
-
-  GSList                         *keyboards; /* PhocKeyboard */
-  GSList                         *pointers;  /* PhocPointer */
-  GSList                         *switches;  /* PhocSwitch */
-  GSList                         *touch;     /* PhocTouch */
-  GSList                         *tablets;   /* PhocTablet */
-  struct wl_list                  tablet_pads;
+  GSList                         *keyboard_shortcuts_inhibitors; /* (element-type PhocKeyboardShortcutsInhibit) */
+  GSList                         *keyboards; /* (element-type PhocKeyboard) */
+  GSList                         *pointers;  /* (element-type PhocPointer) */
+  GSList                         *switches;  /* (element-type PhocSwitch) */
+  GSList                         *touch;     /* (element-type PhocTouch) */
+  GSList                         *tablets;   /* (element-type PhocTablet) */
+  GSList                         *tablet_pads; /* (element-type PhocTabletPads) */
 
   struct wl_listener              request_set_selection;
   struct wl_listener              request_set_primary_selection;
@@ -69,6 +68,12 @@ typedef struct _PhocSeat {
   struct wl_listener              destroy;
 } PhocSeat;
 
+/**
+ * PhocSeatView:
+ *
+ * Structure used by [type@Seat] and [type@Cursor] to track its
+ * views.
+ */
 typedef struct _PhocSeatView {
   PhocSeat          *seat;
   PhocView          *view;
@@ -76,54 +81,8 @@ typedef struct _PhocSeatView {
   bool               has_button_grab;
   double             grab_sx;
   double             grab_sy;
-
-  struct wl_list     link;   // PhocSeat::views
 } PhocSeatView;
 
-struct _PhocDragIcon {
-  PhocSeat             *seat;
-  struct wlr_drag_icon *wlr_drag_icon;
-
-  double                x, y;
-  double                dx, dy;
-
-  struct wl_listener    surface_commit;
-  struct wl_listener    map;
-  struct wl_listener    unmap;
-  struct wl_listener    destroy;
-};
-
-typedef struct _PhocTabletPad {
-  struct wl_list                   link;
-  struct wlr_tablet_v2_tablet_pad *tablet_v2_pad;
-
-  PhocSeat                        *seat;
-  struct wlr_input_device         *device;
-
-  struct wl_listener               device_destroy;
-  struct wl_listener               attach;
-  struct wl_listener               button;
-  struct wl_listener               ring;
-  struct wl_listener               strip;
-
-  PhocTablet                      *tablet;
-  struct wl_listener               tablet_destroy;
-} PhocTabletPad;
-
-typedef struct _PhocTabletTool {
-  struct wl_list                    link;
-  struct wl_list                    tool_link;
-  struct wlr_tablet_v2_tablet_tool *tablet_v2_tool;
-
-  PhocSeat                         *seat;
-  double                            tilt_x, tilt_y;
-
-  struct wl_listener                set_cursor;
-  struct wl_listener                tool_destroy;
-
-  PhocTablet                       *current_tablet;
-  struct wl_listener                tablet_destroy;
-} PhocTabletTool;
 
 typedef struct PhocPointerConstraint {
   struct wlr_pointer_constraint_v1 *constraint;
@@ -141,16 +100,17 @@ void               phoc_seat_add_device (PhocSeat                *seat,
 void               phoc_seat_configure_cursor (PhocSeat *seat);
 PhocCursor        *phoc_seat_get_cursor (PhocSeat *self);
 
-void               phoc_seat_configure_xcursor (PhocSeat *seat);
-
 bool               phoc_seat_grab_meta_press (PhocSeat *seat);
 
 PhocView          *phoc_seat_get_focus_view  (PhocSeat *seat);
 void               phoc_seat_set_focus_view  (PhocSeat *seat, PhocView *view);
 void               phoc_seat_set_focus_layer (PhocSeat                    *seat,
                                               struct wlr_layer_surface_v1 *layer);
+void               phoc_seat_set_focus_surface (PhocSeat           *self,
+                                                struct wlr_surface *wlr_surface);
 
 void               phoc_seat_cycle_focus (PhocSeat *seat, gboolean forward);
+void               phoc_seat_focus_workspace (PhocSeat *seat, PhocWorkspace *workspace);
 
 void               phoc_seat_begin_move (PhocSeat *seat, PhocView *view);
 
@@ -161,19 +121,26 @@ void               phoc_seat_end_compositor_grab (PhocSeat *seat);
 
 PhocSeatView      *phoc_seat_view_from_view (PhocSeat *seat, PhocView *view);
 
-void               phoc_drag_icon_update_position (PhocDragIcon *icon);
-
-void               phoc_drag_icon_damage_whole (PhocDragIcon *icon);
-
 void               phoc_seat_set_exclusive_client (PhocSeat         *seat,
                                                    struct wl_client *client);
 
-bool               phoc_seat_allow_input (PhocSeat           *seat,
-                                          struct wl_resource *resource);
+bool               phoc_seat_is_input_allowed (PhocSeat           *seat,
+                                               struct wl_resource *resource);
 
 void               phoc_seat_maybe_set_cursor (PhocSeat *self, const char *name);
 
 gboolean           phoc_seat_has_touch    (PhocSeat *self);
 gboolean           phoc_seat_has_pointer  (PhocSeat *self);
 gboolean           phoc_seat_has_keyboard (PhocSeat *self);
+gboolean           phoc_seat_has_hw_keyboard (PhocSeat *self);
 gboolean           phoc_seat_has_switch   (PhocSeat *self, enum wlr_switch_type type);
+
+void               phoc_seat_update_last_touch_serial (PhocSeat *self, uint32_t serial);
+void               phoc_seat_update_last_button_serial (PhocSeat *self, uint32_t serial);
+uint32_t           phoc_seat_get_last_button_or_touch_serial (PhocSeat *self);
+void               phoc_seat_notify_activity (PhocSeat *self);
+gint64             phoc_seat_get_last_event_ts (PhocSeat *self);
+
+gboolean           phoc_seat_shortcuts_inhibited (const PhocSeat *self);
+void               phoc_seat_add_shortcuts_inhibit (PhocSeat                                   *self,
+                                                    struct wlr_keyboard_shortcuts_inhibitor_v1 *inhibitor);
