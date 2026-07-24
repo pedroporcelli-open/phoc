@@ -39,8 +39,6 @@
 #include <wlr/util/region.h>
 #include <wlr/util/transform.h>
 #include <wlr/render/allocator.h>
-#include <GLES2/gl2.h>
-#include <GLES2/gl2ext.h>
 
 #include <assert.h>
 #include <drm_fourcc.h>
